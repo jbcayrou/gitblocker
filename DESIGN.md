@@ -1332,7 +1332,16 @@ destination alone ([108]). The children of a served repository
 `TRANSPORT` and `SERVERS`, `upload-archive--writer <dir>` [118], whose `index-pack` runs in a bare repository
 gitguard does not handle) inherit a marker for that repository, opened as
 enter_repo opens it; the submodule clones and the `index-pack` of a clone
-in progress inherit `new` ([101]). A clone that creates its gitdir sets
+in progress inherit `new` ([101]) — in the gitdir the clone creates and
+the gitdir roots under it, its `modules/`, and nowhere else. The rule was
+any gitdir, common dir or root under the new path: a prefix, and it
+covered the tree the clone checks out, content the remote chose. git
+opens no gitdir there but for a bug of its own that writes a `.git` from
+a tree (Known limitations): `clone --recurse-submodules` then recursed
+into the planted gitdir as a covered child and ran its config, which
+`clone` followed by `submodule update --init --recursive` refused; and a
+repository a hook cloned into the tree was claimed by the marker, hence
+never auto-trusted ([163]). A clone that creates its gitdir sets
 `clone` instead, which also covers the repositories the new gitdir
 borrows from: `clone --reference <mirror>` enters the mirror before any
 fingerprint holds its config — the clone's auto-trust records it. The
@@ -1978,6 +1987,20 @@ the files, not the order.
   refusal of a repository git accepts and a constant to justify, for a
   nuisance of [159]'s kind. Record:
   `test_a_large_config_is_read_whole_whatever_it_costs`.
+- **A bug of git's own** is out of the model: a repository the user
+  clones, not the sandbox, that makes git write where it must not
+  (CVE-2026-111760, fixed in git 2.56.1 and the maintenance releases of
+  that day: the checkout of a freshly cloned submodule replaces its
+  gitfile with a symlink into its tree, a gitdir of the remote's
+  making). gitguard sees a git start, never what a running git does:
+  the write is not prevented, and what that git runs or reads
+  in-process of the gitdir it wrote is not seen. What it does see is
+  the child git started there — `clone --recurse-submodules` recursing
+  into the planted gitdir — and since [163] that child is judged like
+  any other (a clone covers the gitdir it creates, not its tree; Nested
+  repositories): never trusted, refused, as the same clone in two
+  commands always was. One route closed by a rule that stands without
+  the bug, not a protection against it: the fix is to update git.
 - gitguard.py has no dependency outside the stdlib (diff via `difflib`); the
   tests need `pytest` and `git`.
 - A context without a terminal and without a desktop session (ssh, cron,

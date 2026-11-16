@@ -1289,6 +1289,35 @@ gitguard.py refer to this list (how the project reviews itself: DESIGN.md,
      accepts, and a constant to justify, for a nuisance like [159]'s.
      Found by the third agentic audit. Record:
      test_a_large_config_is_read_whole_whatever_it_costs.
+[163] RCE through a bug of git, and a false positive: the marker of a
+     clone in progress covered a gitdir, common dir or root anywhere
+     under the new path ([101]) — a prefix, what [102] [103] took away
+     from a judged repository — hence a gitdir sitting in the tree the
+     clone checks out, content the remote chose. A sound git opens none
+     there. One whose checkout writes a `.git` from a tree does
+     (CVE-2026-111760, fixed in git 2.56.1 and the maintenance releases
+     of that day: the checkout of a freshly cloned submodule replaces its
+     gitfile with a symlink into its tree): `clone --recurse-submodules`
+     recursed into that gitdir as a covered child, and a
+     `submodule.<x>.update = !<cmd>` of the config planted there ran —
+     while the same clone in two commands (`clone`, `submodule update
+     --init --recursive`) was refused, never trusted, and the clone's
+     own auto-trust refused the result afterwards. The other face: a
+     repository a hook of the user's cloned into the tree during the
+     clone was claimed by the marker, not auto-trusted ([107]), and
+     refused at the first git run there. Out of the threat model (a
+     remote and a bug of git, not the sandbox); found replaying the CVE,
+     2026-11-13 (Debian 13, git 2.47) and 2026-11-16 (macOS, git 2.50),
+     the bug played by the real git plus that one write — its trigger is
+     a path of 2^32 bytes. Fix: a clone covers the gitdir it creates and
+     the gitdir roots under it (gitdir_roots, as for a judged
+     repository); the root is no longer looked at. Every child of an
+     ordinary clone runs there (25 forms traced on git 2.50, 315
+     children, four more in the mirror of a `--reference`, [156]). Not a
+     protection against that bug: what the git that has it runs or reads
+     in-process, no child sees (DESIGN.md, Known limitations). Tests:
+     tests/test_nested.py (the clone, and that git alone as the
+     control), tests/test_legit.py, tests/test_unit.py.
 """
 from __future__ import annotations
 

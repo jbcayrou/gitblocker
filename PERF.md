@@ -239,6 +239,24 @@ prototype, 1 166 branches go from 70 to 40 ms and 11 651 from 450 to
 150 ms. Not done: kept for the next work on `ConfigScan`. No ceiling on
 the size ([162], DESIGN.md, Known limitations).
 
+## 2026-11-16: the marker of a clone ([163])
+
+A child of a clone in progress is covered when its gitdir is a gitdir
+root of the one the clone creates: an `iterdir` of that gitdir's
+`modules/` per child, as for a judged repository, where the former rule
+compared three paths. `git clone --recurse-submodules` of a superproject
+with 30 submodules over `file://` (`clone.py` below, median of 7, macOS,
+git 2.50):
+
+|                    | before  | after   |
+|--------------------|---------|---------|
+| the real git alone | 2.27 s  |         |
+| behind gitguard    | 16.48 s | 16.55 s |
+
++0.07 s over some 220 child gits, a third of a millisecond each. The
+14 s over the real git are those children's interpreter starts, before
+as after ("Child gits" above): about seven per submodule.
+
 ## Where the time goes (2026-10-17 figures)
 
 | component                                             | cost            |
@@ -316,7 +334,61 @@ for name, path in [("before", old), ("after", new)] * 2:
     print(f"{name:7} rc={r.returncode} median {statistics.median(ts) * 1000:.1f} ms")
 ```
 
-`old.py` from `git show <commit>:gitguard.py`. For the
+`old.py` from `git show <commit>:gitguard.py`. A recursive clone, the
+real git alone then behind each copy, child gits included:
+
+```python
+"""Wall time of `git clone --recurse-submodules` of a superproject with N submodules over file://: the
+real git alone, then behind each gitguard.py given, its children too (an exec path whose `git` is that
+script, as tests/conftest.py builds it). usage: clone.py <scratch dir> <N> <rounds> <label=gitguard.py>..."""
+import os, shutil, statistics, subprocess, sys, time
+from pathlib import Path
+work, n, rounds = Path(sys.argv[1]).resolve(), int(sys.argv[2]), int(sys.argv[3])
+GIT = "/opt/homebrew/bin/git"
+core = Path(subprocess.run([GIT, "--exec-path"], capture_output=True, text=True).stdout.strip())
+base = {"PATH": os.environ["PATH"], "HOME": str(work), "GIT_CONFIG_NOSYSTEM": "1"}
+
+def exec_path(name, git):
+    d = work / f"exec-{name}"
+    d.mkdir(parents=True)
+    for e in os.listdir(core):
+        if e != "git":
+            os.symlink("git" if (core / e).resolve() == (core / "git").resolve() else core / e, d / e)
+    os.symlink(git, d / "git")
+    return {**base, "GIT_EXEC_PATH": str(d)}
+
+raw = exec_path("raw", GIT)
+def git(*args, cwd=None):
+    subprocess.run([GIT, *args], cwd=cwd, env=raw, check=True, capture_output=True)
+for k, v in [("user.email", "t@t"), ("user.name", "t"), ("protocol.file.allow", "always")]:
+    git("config", "--global", k, v)
+top = work / "top"
+git("init", "-q", str(top))
+for i in range(n):
+    s = work / f"s{i}"
+    git("init", "-q", str(s))
+    git("commit", "-q", "--allow-empty", "-m", "s", cwd=s)
+    git("submodule", "add", "-q", f"file://{s}", f"libs/s{i}", cwd=top)
+git("commit", "-qm", "top", cwd=top)
+runs = {"git": ([GIT], raw)}
+for label, gg in (a.split("=", 1) for a in sys.argv[4:]):
+    gg = os.path.abspath(gg)
+    os.chmod(gg, 0o755)      # the exec path's `git` is run by git: not executable, the children are the PATH's git
+    runs[label] = ([sys.executable, gg, "git"], {**exec_path(label, gg), "GITGUARD_REAL_GIT": GIT,
+                   "GITGUARD_STATE": str(work / f"state-{label}"), "GITGUARD_NO_NOTIFY": "1"})
+times = {k: [] for k in runs}
+for _ in range(rounds):
+    for label, (argv, env) in runs.items():
+        t = time.perf_counter()
+        subprocess.run([*argv, "clone", "-q", "--recurse-submodules", f"file://{top}", str(work / "dst")],
+                       env=env, check=True, capture_output=True)
+        times[label].append(time.perf_counter() - t)
+        shutil.rmtree(work / "dst")
+for label, ts in times.items():
+    print(f"{label:8} median {statistics.median(ts):6.2f} s")
+```
+
+For the
 kernel: `git clone --depth 1
 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git`
 (a few minutes, 2 GB; the GitHub mirror may hang on `info/refs`).

@@ -490,6 +490,9 @@ refused (git itself reads it against two different directories in one run).
   invisible too.
 - It cannot close the race between its check and git's execution if the
   sandbox is still writing. Stop the sandbox before running git on the host.
+- It is no substitute for an up-to-date git. A repository you clone that
+  exploits a bug of git itself acts inside the git you ran, where gitguard
+  sees nothing.
 - `restore` only cleans the pivot vector: objects, commits and tree files
   dropped by the sandbox stay there for you to inspect. It never writes
   outside the repository: a watched file there (`../shared-hooks`) is named

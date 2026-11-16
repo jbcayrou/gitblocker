@@ -67,7 +67,9 @@ paid for by a bypass.
   [103]); at another work tree root, only if what its config names there
   was hashed ([115] [120]); a served repository, exactly ([121] [122]); a
   repository a covered root borrows objects from, whose config and hooks
-  the scan watches like a local remote's (`alternate_repos`, [156]). It
+  the scan watches like a local remote's (`alternate_repos`, [156]). A
+  clone in progress hashed nothing: it covers the gitdir it creates and
+  the roots under it, never a gitdir of the tree it checks out ([163]). It
   lives as long as the process that set it, pid and start time
   (`_ancestors`), never a clock ([104] [114]); a child git does not
   detach (`keep_attached`, [117]). A tree never trusted (a submodule, a

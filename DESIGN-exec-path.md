@@ -214,13 +214,27 @@ own trust key for the **user's** commands, as before.
 
 - `GITGUARD_JUDGED=<pid>.<start>:new=<path>[,<gitdir>]` — set by `run_git` for
   `clone` and `init` (the parent judges nothing: the repository does not
-  exist yet; auto-trust comes after git returns). Covered: anything whose
-  gitdir, common dir **or** root is `<path>` or under it, or at `<gitdir>`
-  (`--separate-git-dir`). The clone's own `index-pack` runs with
+  exist yet; auto-trust comes after git returns). Covered: a repository
+  whose gitdir and common dir are the gitdir the command creates —
+  `<gitdir>` (`--separate-git-dir`), else `<path>/.git` once it is a
+  directory, else `<path>` itself (bare, or a clone under
+  `GIT_WORK_TREE`) — or a gitdir root nested under it (`gitdir_roots`,
+  the recognition of 3.3). The clone's own `index-pack` runs with
   `GIT_DIR=<new>/.git` from the user's cwd ([101]: compared by root alone,
   every clone but of a plain local path died "never trusted" — and from a
   trusted cwd reported a false diff of it); the submodule clones of
-  `--recurse-submodules` run under `<path>`. Every form of clone and init
+  `--recurse-submodules` go under its `modules/`. Nothing else, and not
+  the tree. Until [163] the rule was a gitdir, common dir **or** root
+  anywhere under `<path>`: a prefix, which 3.3 gave up for a judged
+  repository, and it covered a gitdir sitting in what the clone checks
+  out — content the remote chose. git opens none there unless a bug of
+  its own writes a `.git` from a tree (CVE-2026-111760: the checkout of
+  a freshly cloned submodule replaces its gitfile with a symlink into
+  its tree); `clone --recurse-submodules` then recursed into it as a
+  covered child and its config ran, where `clone` followed by `submodule
+  update --init --recursive` refused it. The same prefix claimed a
+  repository a hook cloned into the tree, which was then never
+  auto-trusted (3.5). Every form of clone and init
   sets it, bare and template included (`NewRepo`); only the auto-trust
   is withheld for those. A clone that creates its gitdir sets `clone=`
   in place of `new=`: the same coverage, plus the repositories the new

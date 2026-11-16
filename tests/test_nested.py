@@ -286,3 +286,100 @@ def test_worktree_add_from_a_linked_worktree_is_still_asked(gg: GG, repo: Path, 
     r = gg.run("git", "worktree", "add", "-q", str(tmp_path / "w2"), cwd=w1)
     assert r.rc == 0 and "reference updated" not in r.err, r.text
     assert gg.check(repo).blocked and gg.check(w1).blocked
+
+
+# ------------------------------------- [163] what a clone in progress does not cover
+# A clone judges nothing, the repository does not exist yet; its children
+# inherit in the gitdir it creates and in the gitdirs git puts under that
+# one's `modules/`. Not in a gitdir found in what the clone checks out:
+# content the remote chose. A sound git never opens one; a git with a bug
+# that writes a `.git` from a tree does, and that family comes back. The
+# tests take the real git plus that one write.
+def _git_writing_dotgit_from_a_tree(tmp_path: Path) -> Path:
+    """The real git, plus the write of the bug: once it has checked out a
+    submodule whose tree holds `payload/`, the gitfile `.git` there is a
+    symlink to it. Under a dashed name too (`git-upload-pack`: a link to
+    `git` in an exec path)."""
+    import shlex
+    from tests.conftest import REAL_GIT
+    git = shlex.quote(REAL_GIT)
+    g = tmp_path / "that-git"
+    write_exec(g, f"""#!/bin/sh
+case "${{0##*/}}" in git-*) b=${{0##*/}}; set -- "${{b#git-}}" "$@";; esac
+co=
+for a in "$@"; do [ "$a" = checkout ] && co=1; done
+[ -n "$co" ] || exec {git} "$@"
+{git} "$@"; rc=$?
+[ -f .git ] && [ ! -L .git ] && [ -d payload ] && rm -f .git && ln -s payload .git
+exit $rc
+""")
+    return g
+
+
+def _superproject_with_a_gitdir_in_a_submodule_tree(gg: GG, tmp_path: Path, mark: Path) -> Path:
+    """What the victim clones: `top`, whose submodule `sub` holds in its
+    tree a gitdir, `payload/` — a config with `submodule.x.update = !<cmd>`
+    and an index with the gitlink `x`: the first `git submodule update` run
+    with that gitdir runs the command."""
+    from tests.attacks._helpers import make_source
+    x = make_source(gg, tmp_path, "x")
+    sha = gg.git("rev-parse", "HEAD", cwd=x).out.strip()
+    scratch, sub, top = tmp_path / "scratch", tmp_path / "sub", tmp_path / "top"
+    for r in (scratch, sub, top):
+        assert gg.git("init", "-q", str(r)).rc == 0
+    assert gg.git("update-index", "--add", "--cacheinfo", f"160000,{sha},x", cwd=scratch).rc == 0
+    p = sub / "payload"
+    for d in ("objects", "refs"):
+        (p / d).mkdir(parents=True)
+        (p / d / "keep").write_text("")
+    (p / "HEAD").write_text("ref: refs/heads/main\n")
+    shutil.copy(scratch / ".git/index", p / "index")
+    (p / "config").write_text("[core]\n\trepositoryformatversion = 0\n\tbare = false\n"
+                              f'[submodule "x"]\n\turl = file://{x}\n\tactive = true\n'
+                              f'\tupdate = "!touch {mark}; :"\n')
+    (sub / ".gitmodules").write_text(f'[submodule "x"]\n\tpath = x\n\turl = file://{x}\n')
+    assert gg.git("add", "-A", cwd=sub).rc == 0
+    assert gg.git("commit", "-qm", "sub", cwd=sub).rc == 0
+    (top / "README").write_text("top\n")
+    assert gg.git("add", "README", cwd=top).rc == 0
+    assert gg.git("submodule", "add", "-q", f"file://{sub}", "sub", cwd=top).rc == 0
+    assert gg.git("commit", "-qm", "top", cwd=top).rc == 0
+    return top
+
+
+def test_clone_does_not_cover_a_gitdir_of_the_tree(gg: GG, tmp_path: Path) -> None:
+    """`clone --recurse-submodules`: the checkout of `sub` leaves `sub/.git`
+    pointing into its tree, and the clone recurses there. The marker
+    covered whatever sat under the new path, that gitdir included, and
+    its config ran — while the same clone in two commands refused it.
+    The child is judged: never trusted, nothing runs, no auto-trust."""
+    mark = tmp_path / "RAN"
+    top = _superproject_with_a_gitdir_in_a_submodule_tree(gg, tmp_path, mark)
+    bug = GG({**gg.env, "GITGUARD_REAL_GIT": str(_git_writing_dotgit_from_a_tree(tmp_path))},
+             gg.state, gg.raw_exec)
+    dst = tmp_path / "dst"
+    r = bug.run("git", "clone", "-q", "--recurse-submodules", f"file://{top}", str(dst), cwd=tmp_path)
+    assert (dst / "sub/.git").is_symlink(), f"the bug was not played, the test proves nothing\n{r.text}"
+    assert not mark.exists(), f"the config of a gitdir of the tree ran\n{r.text}"
+    assert r.rc != 0 and "never trusted" in r.err and "new repository trusted" not in r.err, r.text
+    assert gg.check(dst).blocked and gg.run("git", "status", "--short", cwd=dst / "sub").blocked
+
+
+def test_clone_gitdir_of_the_tree_control_that_git_runs_it(gg: GG, tmp_path: Path) -> None:
+    """Positive control: the same clone by that git alone, its children
+    too (the raw exec path with it as `git`)."""
+    import os
+    import subprocess
+    mark = tmp_path / "RAN"
+    top = _superproject_with_a_gitdir_in_a_submodule_tree(gg, tmp_path, mark)
+    git = _git_writing_dotgit_from_a_tree(tmp_path)
+    ep = tmp_path / "exec-with-the-bug"
+    ep.mkdir()
+    for n in os.listdir(gg.raw_exec):
+        os.symlink(git if n == "git" else os.readlink(gg.raw_exec / n), ep / n)
+    dst = tmp_path / "dst"
+    r = subprocess.run([str(git), "clone", "-q", "--recurse-submodules", f"file://{top}", str(dst)],
+                       cwd=tmp_path, env={**gg.raw_env, "GIT_EXEC_PATH": str(ep)},
+                       capture_output=True, text=True)
+    assert (dst / "sub/.git").is_symlink() and mark.exists(), \
+        f"git no longer runs the config of a gitdir its submodule's `.git` leads to: [163] may be moot\n{r.stderr}"

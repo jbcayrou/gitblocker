@@ -371,7 +371,9 @@ def test_judged_covers_what_the_walk_hashed(tmp_path: Path, monkeypatch) -> None
     the gitdir's name; never a gitdir planted in a volatile zone, nor
     `hooks/x`, nor another repository; the same gitdir with another tree
     is covered while its config names nothing in a tree ([115]), judged
-    when it does ([72] [120])."""
+    when it does ([72] [120]). A clone in progress: the gitdir it creates
+    and the roots under it, whatever the layout, never a gitdir of the
+    tree it checks out ([163])."""
     root, g = _layout(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -412,13 +414,27 @@ def test_judged_covers_what_the_walk_hashed(tmp_path: Path, monkeypatch) -> None
     assert not j.covers(_repo(tmp_path / "whatever", g)), "served, hooks named in its tree [122]"
     (g / "config").unlink()
     assert not j.covers(_repo(tmp_path / "other", tmp_path / "other/.git"))
-    # a clone in progress: gitdir, common or root under the new path
-    gg_mod.set_judged("new", str(tmp_path / "new"), str(tmp_path / "sep"))
+    # a clone in progress: the gitdir it creates and the roots under it, never its tree [163]
+    new, sep, bare = tmp_path / "new", tmp_path / "sep", tmp_path / "bare.git"
+    for d in (new / ".git/modules/sub", new / ".git/refs/p", new / "sub/payload", sep / "modules/sub", bare):
+        d.mkdir(parents=True)
+        (d / "HEAD").write_text("ref: refs/heads/main\n")
+    gg_mod.set_judged("clone", str(new))
     j = gg_mod.read_judged()
-    assert j.covers(_repo(tmp_path, tmp_path / "new/.git")), "[101] index-pack: GIT_DIR under new, cwd elsewhere"
-    assert j.covers(_repo(tmp_path / "new/sub", tmp_path / "new/.git/modules/sub"))
-    assert j.covers(_repo(tmp_path / "new", tmp_path / "sep")), "--separate-git-dir"
-    assert not j.covers(_repo(tmp_path / "newer", tmp_path / "newer/.git"))
+    assert j.covers(_repo(tmp_path, new / ".git")), "[101] index-pack: GIT_DIR=<new>/.git, cwd elsewhere"
+    assert j.covers(_repo(new / "sub", new / ".git/modules/sub"))
+    assert not j.covers(_repo(new / "sub", new / "sub/payload")), "[163] a gitdir of the tree"
+    assert not j.covers(_repo(new / "vendor", tmp_path / "other/.git")), "[163] a tree under the new path"
+    assert not j.covers(_repo(new / "sub", new / ".git/refs/p")), "a volatile zone of the new gitdir, as [103]"
+    assert not j.covers(_repo(new / "sub", new / ".git/modules/sub", new / "sub/payload")), "planted commondir"
+    gg_mod.set_judged("new", str(new), str(sep))
+    j = gg_mod.read_judged()
+    assert j.covers(_repo(new, sep)) and j.covers(_repo(new / "sub", sep / "modules/sub")), "--separate-git-dir"
+    assert not j.covers(_repo(new / "sub", new / "sub/payload"))
+    gg_mod.set_judged("new", str(bare))
+    j = gg_mod.read_judged()
+    assert j.covers(_repo(tmp_path, bare)), "--bare: the new path is the gitdir"
+    assert not j.covers(_repo(bare / "x", bare / "x/.git")) and not j.covers(_repo(tmp_path / "o", tmp_path / "o/.git"))
 
 
 def _store(d: Path, refs: bool = True) -> Path:

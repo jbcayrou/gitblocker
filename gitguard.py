@@ -5346,10 +5346,11 @@ class Judged:
     and the directory its state key is named after — root and label empty
     for a served repository, which nobody judged as a whole)
     or `<pid>.<start>:new=<path>[,<gitdir>]` (a clone/init in progress: the
-    repository does not exist yet; it and its submodule clones are under
-    `path`, its gitdir at `gitdir` for `--separate-git-dir`; `clone=` in
-    place of `new=` for a clone that creates its gitdir, which also enters
-    the repositories it borrows from, [156]). Paths are
+    repository does not exist yet; its gitdir is `gitdir` for
+    `--separate-git-dir`, else `<path>/.git`, or `<path>` itself when bare,
+    and its submodule clones go under that gitdir's `modules/`, [163];
+    `clone=` in place of `new=` for a clone that creates its gitdir, which
+    also enters the repositories it borrows from, [156]). Paths are
     hex-encoded: they hold anything but NUL. `pid`, `start`: the process
     that set the marker — gitguard, which execs the real git under its own
     pid, or stays its parent for a clone — and its start time. The marker
@@ -5403,9 +5404,21 @@ class Judged:
           fine — refused every filter-branch ([115]) and covered a linked
           worktree's hooks ([120]) and a push-to-deploy tree's ([122]).
 
-        A clone in progress covers anything whose gitdir, common dir or root
-        is under the new path ([101]: the clone's index-pack runs with
-        `GIT_DIR=<new>/.git` from the user's cwd), and the repositories the
+        A clone in progress hashed nothing. It covers the gitdir the
+        command creates — the `--separate-git-dir` target, else
+        `<new>/.git` once it is a directory, else `<new>` itself (a bare
+        clone, one under `GIT_WORK_TREE`) — and the gitdir roots nested
+        under it, recognised as above: the clone's index-pack runs with
+        `GIT_DIR=<new>/.git` from the user's cwd ([101]), the submodule
+        clones of `--recurse-submodules` go under its `modules/`. Not what
+        sits in the tree it checks out, content the remote chose. The
+        former rule — a gitdir, common dir or root anywhere under the new
+        path — covered a gitdir found there, which a git with a bug of its
+        own opens (the checkout of a freshly cloned submodule replacing
+        its gitfile: the config planted in that tree ran inside `clone
+        --recurse-submodules`, and was refused by the same clone in two
+        commands), and claimed a repository a hook cloned into the tree,
+        left never trusted ([163]). It covers as well the repositories the
         new gitdir borrows from: `--reference <mirror>`, entered before any
         fingerprint holds the mirror's config — the first use, as for a
         local source, of a repository the command line names; what the
@@ -5417,12 +5430,11 @@ class Judged:
         case; raises Refuse as `inspect` would on a config git dies on."""
         if self.kind in ("new", "clone"):
             news = [Path(p) for p in self.paths]
-            if any(n == p or n in p.parents for n in news for p in (repo.gitdir, repo.common, repo.root)):
-                return True
-            if self.kind == "new":
-                return False
             new = news[1] if len(news) > 1 else news[0] / ".git" if (news[0] / ".git").is_dir() else news[0]
-            return (repo.gitdir, repo.common) in _borrowed(gitdir_roots(new))
+            roots = set(gitdir_roots(new))
+            if repo.gitdir in roots and repo.common in roots:
+                return True
+            return self.kind == "clone" and (repo.gitdir, repo.common) in _borrowed(roots)
         gitdir, common = Path(self.paths[0]), Path(self.paths[1])
         root = Path(self.paths[2]) if self.paths[2] else None
         if root is None:

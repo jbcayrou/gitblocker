@@ -982,6 +982,53 @@ def test_recurse_submodules_clone_over_file_url(gg: GG, repo: Path, tmp_path: Pa
     assert (dst / "sub/s").exists()
 
 
+# ------------------------- [163] a clone covers the gitdir it creates, not its tree
+@pytest.mark.parametrize("form", ["nested", "separate", "jobs", "work-tree"])
+def test_clone_children_run_in_the_gitdir_it_creates(gg: GG, repo: Path, tmp_path: Path, form: str) -> None:
+    """[163] the `new` marker covers the gitdir the clone creates and the
+    gitdirs under its `modules/`, no longer whatever sits under the new
+    path. Every child of an ordinary clone is there: a submodule's own
+    submodule, under a `--separate-git-dir`, cloned shallow and in
+    parallel, and with `GIT_WORK_TREE` (the gitdir is the new path
+    itself, without `--bare`). One elsewhere would die "never trusted"."""
+    inner, mid = make_source(gg, tmp_path, "inner"), make_source(gg, tmp_path, "mid")
+    for r, src, path in ((mid, inner, "deep/inner"), (repo, mid, "libs/mid")):
+        assert gg.git("submodule", "add", "-q", f"file://{src}", path, cwd=r).rc == 0
+        assert gg.git("commit", "-qm", path, cwd=r).rc == 0
+    dst, tree = tmp_path / "dst", tmp_path / "dst"
+    opts = {"nested": [], "separate": [f"--separate-git-dir={tmp_path / 'g'}"],
+            "jobs": ["-j4", "--depth", "1", "--shallow-submodules"], "work-tree": []}[form]
+    if form == "work-tree":
+        tree = tmp_path / "wt"
+        gg.env["GIT_WORK_TREE"] = str(tree)
+    r = gg.run("git", "clone", "-q", "--recurse-submodules", *opts, f"file://{repo}", str(dst), cwd=tmp_path)
+    assert r.rc == 0 and "never trusted" not in r.err and "✗" not in r.err, r.text
+    assert (tree / "libs/mid/deep/inner/s").exists()
+    if form != "work-tree":
+        assert r.err.count("trusted:") == 1 and not gg.check(dst).blocked, r.text
+
+
+def test_clone_by_a_hook_into_the_tree_of_a_clone_is_trusted_on_its_own(gg: GG, repo: Path,
+                                                                        tmp_path: Path) -> None:
+    """[163] a hook of the user's own (a global `core.hooksPath`) clones a
+    tool into the tree being checked out. That repository is no part of
+    the clone in progress — its gitdir is not under the new one — and is
+    trusted like any clone a child runs ([107]). The marker claimed it,
+    as it did everything under the new path: no state of its own, and
+    the first git run there was refused, never trusted."""
+    src = make_source(gg, tmp_path)
+    hooks = tmp_path / "hooks"
+    write_exec(hooks / "post-checkout", "#!/bin/sh\n[ -n \"$IN_HOOK\" ] && exit 0\n"
+               f"IN_HOOK=1 git clone -q file://{src} vendor/tool\n")
+    gg.git("config", "--global", "core.hooksPath", str(hooks))
+    dst = tmp_path / "dst"
+    r = gg.run("git", "clone", "-q", f"file://{repo}", str(dst), cwd=tmp_path)
+    assert r.rc == 0 and "✗" not in r.err and r.err.count("trusted:") == 2, r.text
+    r = gg.run("git", "status", "--short", cwd=dst / "vendor/tool")
+    assert r.rc == 0 and not r.err, r.text
+    assert not gg.check(dst).blocked
+
+
 # ------------------------------------- [102] coverage by the judged gitdir, not by name
 def test_submodule_in_linked_worktree(gg: GG, repo: Path, tmp_path: Path) -> None:
     """[102] a linked worktree's submodule lives in
