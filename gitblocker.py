@@ -11,10 +11,11 @@ Usage:
                            back into the reference state (a file outside the
                            repository is named, never written)
   gitblocker git <args>    check, then run git; honours
-                           -C/--git-dir/--work-tree; successful clone/init →
-                           automatic trust; a pure branch-tracking addition
-                           (push -u…) is accepted on its own; any other change
-                           is shown, then asked on the terminal [y/N]
+                           -C/--git-dir/--work-tree/-c; successful clone/init
+                           → automatic trust; a change of the closed
+                           auto-accept list (branch tracking, a remote with a
+                           network URL) is accepted on its own; any other
+                           change is shown, then asked on the terminal [y/N]
   gitblocker list          registered repositories and their status
   gitblocker pending [<repo>... | -a | -c <repo>...]
                            decisions waiting: a git run by a program with no
@@ -23,8 +24,8 @@ Usage:
                            GITBLOCKER_WAIT ends
   gitblocker forget <repo>... | --missing
   gitblocker prune         = forget --missing
-  gitblocker retrust       re-validate unchanged repositories (after an
-                           upgrade)
+  gitblocker retrust       after an upgrade: re-validate in bulk the "ok" and
+                           "legacy" repositories; a modified one is skipped
   gitblocker exec-path [<dir>]
                            (re)build an exec path whose git is gitblocker, for
                            GIT_EXEC_PATH where git's own cannot be diverted
@@ -123,8 +124,9 @@ def git_prefix() -> str:
     (interpolate_path → system_path): its installation prefix, compiled in
     or found at runtime from the binary — not GIT_EXEC_PATH, which does not
     move it. Asked of the real git, the one way to know it, and the only
-    thing gitblocker ever runs git to learn: a constant of the binary, never
-    anything about a repository. From `/` (no repository discovered), the
+    thing a check runs git to learn (check_wrap and `gitblocker exec-path`
+    ask it its `--exec-path`): a constant of the binary, never anything
+    about a repository. From `/` (no repository discovered), the
     environment stripped of every GIT_* variable, no system or user config
     (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL=/dev/null), no pager: `git
     config --get` of a `-c` value reads nothing else, runs no hook, and a

@@ -1,7 +1,8 @@
 # gitblocker — design record
 
 **`gitblocker.py`** is the whole program: one file, Python 3 standard library
-only, Linux and macOS (Python ≥ 3.9, tested on 3.12 and 3.14). This file is
+only, Linux and macOS (Python ≥ 3.9: the oldest, the latest and each tested
+distribution's own are in the matrix of "Tests"). This file is
 the design record: threat model, what is checked and why, the decisions
 that were ruled out, and the history of the bypasses found (numbered `[n]`,
 catalogued in `tests/attacks/__init__.py`). README.md is the user-facing
@@ -32,6 +33,18 @@ and `.git/` sits inside it. Malicious code in there can:
 When the user next runs `git` **on the host**, that code runs with the user's
 rights (SSH keys, credentials, shell). That is the sandbox-to-host pivot.
 
+The same files reach the host with no sandbox at all: **an archive
+unpacked there, a directory copied from another machine, with a `.git`
+inside**. A second scenario in its own right (2026-11-10): the files are
+the user's, so git's `safe.directory` ownership check says nothing, and
+the first git run in the directory — a prompt's — runs what its config
+names. For gitblocker it is a repository nobody trusted: refused until
+the user has looked and run `gitblocker trust`. It is also why keeping
+the gitdir out of the volume was ruled out as the design
+(`--separate-git-dir`, or a clone given to the sandbox and fetched back):
+that protects a repository the user set up, and nothing of one that
+arrives with its `.git`.
+
 gitblocker is a **detection** layer. **Prevention** layers (an AppArmor/seccomp
 profile forbidding writes to `/workspace/**/.git/{config,hooks,…}`, a global
 `core.hooksPath`, `safe.bareRepository=explicit`, an unmapped uid in rootless
@@ -57,16 +70,20 @@ gitblocker               check the current repository, exit 1 if suspect or neve
 gitblocker trust         record the current state as the reference (+ backup of the files)
 gitblocker diff          show what differs from the reference
 gitblocker restore [-y]  put the watched files back into the reference state
-gitblocker git <args>    check, then run /usr/bin/git; honours -C/--git-dir/--work-tree;
-                         successful clone/init → auto trust; pure branch tracking → accepted
-                         on its own; any other change → diff, then a [y/N] question on the terminal
-gitblocker list          all registered repositories: status (ok/modified/structure/missing/legacy/unknown), date, path
+gitblocker git <args>    check, then run the real git; honours -C/--git-dir/--work-tree/-c;
+                         successful clone/init → auto trust; a change of the closed auto-accept
+                         list (branch tracking, a remote with a network URL) → accepted on its
+                         own; any other change → diff, then a [y/N] question on the terminal
+gitblocker list          all registered repositories: status
+                         (ok/modified/structure/missing/unreadable/legacy/unknown), date, path
 gitblocker pending [<repo>... | -a | -c <repo>...]   decisions waiting for a git blocked by a program:
                          list; review (diff + calling process) and allow/refuse; clear
 gitblocker forget <repo>... | --missing   remove entries (the repository becomes "never trusted" again)
 gitblocker prune         = forget --missing
 gitblocker retrust       re-validate in bulk the "ok" or "legacy" repositories; anything
                          modified is skipped
+gitblocker exec-path [<dir>]   (re)build an exec path whose `git` is gitblocker, for
+                         GIT_EXEC_PATH where git's own cannot be diverted
 gitblocker version       `VERSION`, which the package is built from
 gitblocker help
 ```
@@ -134,8 +151,12 @@ variables are read as git reads them, present or not: an empty
 `GIT_CONFIG_SYSTEM` / `GIT_CONFIG_GLOBAL` names no file, and a
 `GIT_CONFIG_GLOBAL` that names one replaces `~/.gitconfig` and the XDG
 file ([140]: `or default` read empty as unset). Changing
-the real git changes the fingerprint (one `trust`). **The one thing
-gitblocker runs git to learn**
+the real git no longer changes the fingerprint (it did, one `trust` each
+time, while that git's system config was part of it; a value in
+`%(prefix)/`, below, still follows the binary). **The one thing
+a check runs git to learn** (`check_wrap`, at `trust`, `list` and
+`retrust`, and `gitblocker exec-path` ask it one thing more, its
+`--exec-path`)
 is its installation prefix (`git_prefix`, [128]): what a leading
 `%(prefix)/` in a pathname value or an include path expands to
 (one resolver for an include, `include_path`, shared by `ConfigScan`
@@ -1370,7 +1391,9 @@ as a job without a terminal: that one waits `GITBLOCKER_WAIT`, then `:Git
 status` (with the tty) prints the refusal inside vim. pre-commit's hook
 runs under the real git's exec path (`HOOKGIT=/usr/lib/git-core/git`); the
 four wrapped calls seen came from `pre-commit install`, before the hook
-existed. cron: `PATH=/usr/bin:/bin`, no tty, waits the default 60 s,
+existed (observed before 2026-10-26: that path is diverted too since, and
+the hook's git is gitblocker, a child of the checked `git commit` —
+Nested repositories). cron: `PATH=/usr/bin:/bin`, no tty, waits the default 60 s,
 records `sh ← cron ← cron`; the `%` of a `date +%s` in a crontab is a
 newline, not a gitblocker matter. `git lfs install` writes four
 `filter.lfs.*` keys into the global config: while that file was hashed,
@@ -1390,7 +1413,7 @@ gitblocker never walks the work tree looking for nested `.git`. git opens a
 nested repository through a gitlink: those of the index, which gitblocker
 always reads (`index_gitlinks`; a sparse directory of a sparse index is
 looked at on disk, [87]), and those a command brings from a tree (below:
-[66], [77]–[79], [86]; [89] accepted, Known limitations). This section first said "only
+[66], [77]–[79], [86], [89]). This section first said "only
 once a gitlink references it in the index": that premise was wrong seven
 times, so read every "never" here as a claim to test. The `git add -A`
 that creates an index gitlink executes nothing by itself — verified for `add -A`, `add .`,
@@ -1445,8 +1468,9 @@ these reports asks the gitlink's repository by **running a git inside it**
 --submodule=diff`), which honours the planted config — in the command
 whose check passed.
 
-Since 2026-10-26 (`DESIGN-exec-path.md`, the design record until it is
-merged here) that inner git is gitblocker: git runs its children through
+Since 2026-10-26 (`DESIGN-exec-path.md`, the second file of this design
+record: the marker, the coverage rule, the install, section by section)
+that inner git is gitblocker: git runs its children through
 `<exec-path>/git` (setup_path puts the exec path first in their PATH), and
 gitblocker is diverted there (Debian: `dpkg-divert`, both `/usr/bin/git` and
 `/usr/lib/git-core/git`, whose 160 dashed builtins are symlinks to it;
@@ -1517,8 +1541,11 @@ altogether), asking git for its command list (running git on the
 repository being judged).
 
 What a child never does: ask on the terminal (the parent git may be
-reading it), wait for a `gitblocker pending` decision, auto-accept, notify,
-or write to stdout (the parent parses it). It refuses at once and records.
+reading it), wait for a `gitblocker pending` decision, notify, or write to
+stdout (the parent parses it). It refuses at once and records — or
+accepts what the closed auto-accept list accepts in a shell, the one
+answer that needs no question ([164]: without it pre-commit's first use
+of a hook repository failed at every commit).
 A child's clone or init is auto-trusted like the user's ([107]) unless the
 marker already covers it (`submodule add`'s clone into `modules/<x>`: the
 parent's next command sees it). A covered child's `push` is judged on its
@@ -1557,10 +1584,12 @@ commands that read a submodule **in-process** (`ls-files` and `grep` with
 takes `submodule.<name>.url` or `.active` in `.git/config` — hashed, so a
 planted repository cannot be activated without a refusal.
 
-Performance (M4 Pro, see PERF.md for the full tables): ~33 ms overhead per
-command, constant whatever the tree: interpreter 16 ms, stdlib imports 6 ms,
-**compiling the script 15 ms** (a script run by path is never cached as
-`.pyc`; only an `import` is), gitblocker's own work ~2 ms. The imports are
+Performance (M4 Pro, see PERF.md for the full tables): ~50 ms overhead per
+command on 2026-11-24, constant whatever the tree: interpreter 15 ms,
+stdlib imports 6 ms, **compiling the script ~23 ms** (a script run by path
+is never cached as `.pyc`; only an `import` is — 15 ms and ~33 ms in all
+on 2026-10-21, the script has doubled since), gitblocker's own work ~6
+ms. The imports are
 kept to what every command needs; `subprocess`, `shutil`, `difflib`,
 `termios`, `fcntl` and `dataclasses` were 12 ms of imports paid by every
 check and are now imported where used (trust, restore, pending, the
@@ -1568,8 +1597,8 @@ prompt). The one size-dependent cost was the Python parse of the
 index (40 ms for 96k entries): it is cached in `<key>.idx` keyed by the
 file's sha256 (4 ms for 10 MB; a byte-pattern shortcut "no 0160000 mode
 present" was tried and dropped: in 10 MB of SHAs it appears ~800 times).
-Result on the kernel: `git status` 247 → 293 ms, `git log -1` 6 → 52 ms;
-80–90 ms once after a command that rewrote the index.
+Result on the kernel (2026-10-17): `git status` 247 → 293 ms, `git log -1`
+6 → 52 ms; 80–90 ms once after a command that rewrote the index.
 
 The name scan used to walk the whole gitdir, `objects/` included and twice
 (commondir == gitdir): +250 ms on 30k loose objects, and a wrongful refusal
@@ -1587,8 +1616,9 @@ into the tree was not watched.
 **The matrix** (`.github/workflows/tests.yml`): the suite on every push,
 Linux and macOS, against each supported git (2.39, 2.43, 2.47, 2.50,
 2.56, built by `ci/build-git.sh` with the dashed builtins as symlinks, as
-conftest expects), on Debian 12, Debian 13, Ubuntu 24.04 and Ubuntu 26.04
-with the distribution's git, and once on the oldest python (3.9). A git is
+conftest expects) with the latest python 3, on Debian 12, Debian 13,
+Ubuntu 24.04 and Ubuntu 26.04 with the distribution's git and python, and
+once on the oldest python (3.9). A git is
 supported when the whole suite passes against it; a test that needs a
 feature probes the git under test for it (`git_has`), never its version.
 What its first run by hand found, 2026-11-11: git ≤ 2.39 passes
@@ -1604,11 +1634,12 @@ read) and python 3.9 is not offered — the Linux runner is named
 enters the matrix with its inventory.
 
 **`python3 -m pytest`** (~1850 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
-[160], [161], [179] — accepted limitations; ~410 s, ~70 s with `-n 8` on the command line),
+[160], [161], [179] — accepted limitations; ~410 s, ~90 s with `-n 8` on the command line),
 to run before any change:
 
 - `tests/attacks/` — **the attack corpus**, one module per family (`gitdir`,
-  `symlinks`, `worktree_refs`, `nested`, `config_scope`, `tool_itself`). Each
+  `symlinks`, `worktree_refs`, `nested`, `config_scope`, `index_paths`,
+  `environment`, `tool_itself`). Each
   `attack_*(gb, repo, tmp_path)` function plays the malicious sandbox on a
   clean, trusted repository; its docstring (1st line) is the test name;
   `# [n]` refers to the vulnerability catalogue in `tests/attacks/__init__.py`.
@@ -1650,8 +1681,8 @@ to run before any change:
   read too. The discovery tests carry the `discovery` marker: `pytest -m
   discovery` after a git upgrade re-checks the ports of setup.c (the
   section header in gitblocker.py maps each function to its git original;
-  the suite's header names the git used as the oracle). Checked so far
-  against git 2.47.3 (Debian 13) and 2.50.0 (Homebrew). Known divergences
+  the suite's header names the git used as the oracle). Checked at every
+  push against each git of the matrix above. Known divergences
   are marked `xfail(strict=True)`: the suite stays green, a fix makes the
   test XPASS so the mark gets removed and the scenario promoted to
   `tests/attacks/`. See "Known limitations" for the list.
@@ -1724,18 +1755,34 @@ Rule: any new vector or false positive discovered must first become a test.
 
 ## Adversarial review playbook
 
-gitblocker has been through sixteen adversarial review passes (the numbered
-catalogue in `tests/attacks/__init__.py` is their output: 125 bypasses and
-false positives, two of them RCEs found after the tool was believed solid,
+gitblocker has been through twenty-one adversarial review passes (the numbered
+catalogue in `tests/attacks/__init__.py` is their output, [1] to [179], two
+numbers unused: bypasses and false positives, ten of them RCEs,
 [58]–[65] from the tenth and eleventh, replayed and fixed on 2026-10-22;
 [66]–[70], [72], [73], [75], [76] from the twelfth, fixed on 2026-10-23;
 [77]–[83] from the thirteenth, fixed on 2026-10-24; [84], [85] from a
 design review; [86]–[99] from the fourteenth (six agents, 2026-10-24),
-fixed on 2026-10-25 but [89], closed on 2026-10-26 by the exec-path design (DESIGN-exec-path.md), and [95], accepted;
+fixed on 2026-10-25 but [89], closed on 2026-10-26 by the exec-path design
+(DESIGN-exec-path.md), and [95], accepted;
 [101]–[112] from the fifteenth and [113]–[124] from the sixteenth, both on
 the exec-path design and fixed on 2026-10-27 but [123], accepted; [125]
-from the review of those fixes, 2026-10-28;
-[44], [71] and [74] are accepted limitations, see "Known limitations"; the ninth pass was the
+from the review of those fixes and [126] from the review of that design,
+2026-10-28, the latter accepted, then disarmed on 2026-10-30;
+[127]–[133] from the seventeenth (2026-10-30), fixed that day but the
+strings of [129], accepted; [134]–[142] from the eighteenth (2026-10-31),
+fixed on 2026-11-02; the nineteenth and the twentieth, both on 2026-11-03
+— the catalogue's third and fourth "agentic audits", the fourth on
+ordinary usage, hence its many false positives — gave
+[143]–[151] and [153]–[162], fixed between 2026-11-04 and 2026-11-13 but
+[158]–[162], accepted; [164]–[178] from the twenty-first
+(the fifth agentic audit, 2026-11-23: five agents, one per fix nobody had
+attacked yet, [154]–[157] and [163]), fixed on 2026-11-24.
+Outside any pass: [100] from the inventory of git's source ("Tests"),
+[152] from the first run of the suite against git 2.39 and 2.43
+(2026-11-11), [163] from the replay of a CVE of git (2026-11-13, fixed on
+2026-11-16), [179] a decision (2026-11-24).
+[44], [71], [74], [95], [123], [126], the strings of [129], [158]–[162] and
+[179] are accepted limitations, see "Known limitations"; the ninth pass was the
 promotion of the git-parity `xfail`s [46]–[50]).
 The method that worked, for the next pass — by a human or by agents that know
 nothing of the previous ones:

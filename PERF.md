@@ -14,6 +14,11 @@ again in each submodule, hard-link and FIFO checks, sparse directories):
 machine state — 39.4 → 40.4 ms on a one-file repository, 62.5 → 64.9 ms on
 one with 10 submodules and a global config of 30 aliases and a config hook.
 
+Where it stands now: **+50 ms per command** on the same machine
+("2026-11-24: where the overhead stands", below), about 23 ms of it the
+compilation of the script at every start. The dated sections say what
+each change moved; the tables of 2026-10-17 are kept as measured.
+
 ## Child gits (DESIGN-exec-path.md)
 
 With gitblocker at git's exec path, every child git is gitblocker too. On the
@@ -35,6 +40,19 @@ Re-measured on 2026-10-27 after the marker was redone ([101]–[112]: pid
 lifetime through `/proc`, coverage by `gitdir_roots`, an `iterdir` of
 `modules/` and `worktrees/` per child): 26 / 51 / 51 / 101 ms, the same
 table within noise.
+
+Taken again on 2026-11-24 on macOS (M4 Pro, git 2.50.0, python 3.14;
+`children.py` below, median of 15):
+
+| command                          | raw children | wrapped children |
+|----------------------------------|-------------:|-----------------:|
+| `log -1` (no child)              | 58 ms        | 59 ms            |
+| `commit` (one child: maintenance)| 68 ms        | 119 ms           |
+| alias `!git log` (one child)     | 69 ms        | 118 ms           |
+| alias with three children        | 84 ms        | 234 ms           |
+
+About 50 ms per child there: a child pays the interpreter's start and
+the compilation of the script, as its parent does, and skips the check.
 
 ## Environment
 
@@ -276,6 +294,42 @@ candidates each alias word was (a `resolve()` per distinct token, [58]).
 The check no longer depends on what `~/.gitconfig` holds; the push
 check and the auto-accept of a remote read it, on those commands only.
 
+## 2026-11-24: where the overhead stands
+
+The figure quoted by README.md and DESIGN.md (~33 ms) dated from
+2026-10-21 and had not been taken again. The bench of "Reproducing" on
+the machine of "Environment" (git 2.50.0, python 3.14.6), a clone of
+gitblocker, N = 40:
+
+| command          | git   | gitblocker git | overhead |
+|------------------|------:|---------------:|---------:|
+| `status`         | 5 ms  | 56 ms          | +50 ms   |
+| `log -1`         | 5 ms  | 56 ms          | +51 ms   |
+| `rev-parse HEAD` | 4 ms  | 54 ms          | +50 ms   |
+| `diff --stat`    | 4 ms  | 54 ms          | +50 ms   |
+| `branch`         | 5 ms  | 55 ms          | +50 ms   |
+
+`gitblocker` alone: 51 ms; the floor that bench prints, 31 ms, is the one
+of 2026-10-17 (it imports what the script imported at top level then).
+Where the time goes now (`where.py` below, N = 40, each line the
+difference with the one above; 52.1 ms in all):
+
+| step                                                              | cost    |
+|-------------------------------------------------------------------|--------:|
+| bare interpreter (`python3 -c pass`)                              | 14.9 ms |
+| the top-level imports                                             | 5.6 ms  |
+| `gitblocker.py` compiled (6 431 lines) and its body run (`version`) | 25.1 ms |
+| the check                                                         | 6.5 ms  |
+
+The same code imported from a cached `.pyc` is there in 22.8 ms, where
+the script run by path takes 45.6 ms before any check: about 23 ms of
+compilation, paid at every start, by the command and by each child git
+(the table of "Child gits": about 50 ms a child). On 2026-10-21 the
+plain check took 37 ms: the script was 3 151 lines and 15 ms to compile,
+it has doubled; its own work was put at ~2 ms then, ~6 ms now. The two-file
+layout measured that day (a launcher importing the module, whose `.pyc`
+is cached) saved 12 ms then and would save about 23 ms now.
+
 ## Where the time goes (2026-10-17 figures)
 
 | component                                             | cost            |
@@ -353,7 +407,96 @@ for name, path in [("before", old), ("after", new)] * 2:
     print(f"{name:7} rc={r.returncode} median {statistics.median(ts) * 1000:.1f} ms")
 ```
 
-`old.py` from `git show <commit>:gitblocker.py`. A recursive clone, the
+`old.py` from `git show <commit>:gitblocker.py` (the script had another
+name before 2026-11-24: `git ls-tree --name-only <commit>` says which).
+Where one check goes, from the repository to measure:
+
+```python
+"""Where one `gitblocker` check goes: the interpreter, the top-level imports, the script compiled and its
+body run (`version`, which reads no repository), the check. Each line is a python started with one more
+thing to do; a step costs the difference. Last line: the same code imported from a cached `.pyc`, i.e.
+without the compilation. From the repository to measure. usage: where.py <gitblocker.py> [N]"""
+import ast, os, shutil, statistics, subprocess, sys, tempfile, time
+gb, n = os.path.abspath(sys.argv[1]), int(sys.argv[2]) if len(sys.argv) > 2 else 40
+env = {**os.environ, "GITBLOCKER_STATE": tempfile.mkdtemp(), "GITBLOCKER_NO_NOTIFY": "1"}
+body = ast.parse(open(gb).read()).body      # module level: what every command imports
+mods = sorted({a.name for node in body if isinstance(node, ast.Import) for a in node.names}
+              | {node.module for node in body if isinstance(node, ast.ImportFrom) and node.module != "__future__"})
+cached = tempfile.mkdtemp()
+shutil.copy(gb, os.path.join(cached, "gbmod.py"))
+
+def run(*cmd, cwd=None):
+    ts = []
+    for _ in range(n):
+        t = time.perf_counter()
+        subprocess.run([sys.executable, *cmd], env=env, cwd=cwd, capture_output=True, check=True)
+        ts.append((time.perf_counter() - t) * 1000)
+    return statistics.median(ts)
+
+subprocess.run([sys.executable, gb, "trust"], env=env, capture_output=True, check=True)
+run("-c", "import gbmod", cwd=cached)       # writes the .pyc
+steps = [("bare interpreter", run("-c", "pass")), ("+ top-level imports", run("-c", "import " + ",".join(mods))),
+         ("+ script compiled, body run", run(gb, "version")), ("+ the check", run(gb))]
+prev = 0.0
+for name, t in steps:
+    print(f"{name:30} {t - prev:6.1f} ms")
+    prev = t
+print(f"{'= gitblocker (check)':30} {prev:6.1f} ms")
+print(f"{'imported from a cached .pyc':30} {run('-c', 'import gbmod', cwd=cached):6.1f} ms   (against {steps[2][1]:.1f})")
+```
+
+The "Child gits" table, with a copy of the script (it is made executable):
+
+```python
+"""The "Child gits" table: a trusted one-file repository, the same gitblocker as parent and child, raw
+children against wrapped ones (an exec path whose `git` is the script, as tests/conftest.py builds it).
+usage: children.py <scratch dir> <gitblocker.py> [N]"""
+import os, statistics, subprocess, sys, time
+from pathlib import Path
+work, gb = Path(sys.argv[1]).resolve(), os.path.abspath(sys.argv[2])
+n = int(sys.argv[3]) if len(sys.argv) > 3 else 15
+GIT = "/opt/homebrew/bin/git"
+core = Path(subprocess.run([GIT, "--exec-path"], capture_output=True, text=True).stdout.strip())
+os.chmod(gb, 0o755)      # the exec path's `git` is run by git
+
+def exec_path(name, git, real=None):
+    d = work / f"exec-{name}"
+    d.mkdir(parents=True)
+    for e in os.listdir(core):
+        if e != "git":
+            os.symlink("git" if (core / e).resolve() == (core / "git").resolve() else core / e, d / e)
+    os.symlink(git, d / "git")
+    if real:
+        os.symlink(real, d / "git.real")
+    return str(d)
+
+raw, wrapped = exec_path("raw", core / "git"), exec_path("wrapped", gb, core / "git")
+env = {"PATH": os.environ["PATH"], "HOME": str(work), "GIT_CONFIG_NOSYSTEM": "1", "GITBLOCKER_REAL_GIT": GIT,
+       "GITBLOCKER_STATE": str(work / "state"), "GITBLOCKER_NO_NOTIFY": "1", "GIT_EXEC_PATH": raw}
+repo = work / "repo"
+subprocess.run([GIT, "init", "-q", str(repo)], env=env, check=True, capture_output=True)
+for args in (["config", "user.email", "t@t"], ["config", "user.name", "t"], ["config", "alias.l", "!git log -1"],
+             ["config", "alias.three", "!git log -1 && git log -1 && git log -1"],
+             ["commit", "-q", "--allow-empty", "-m", "init"]):
+    subprocess.run([GIT, *args], cwd=repo, env=env, check=True, capture_output=True)
+subprocess.run([sys.executable, gb, "trust"], cwd=repo, env=env, check=True, capture_output=True)
+
+def run(args, ep):
+    ts = []
+    for _ in range(n):
+        t = time.perf_counter()
+        subprocess.run([sys.executable, gb, "git", *args], cwd=repo, env={**env, "GIT_EXEC_PATH": ep},
+                       check=True, capture_output=True)
+        ts.append((time.perf_counter() - t) * 1000)
+    return statistics.median(ts)
+
+for name, args in [("log -1 (no child)", ["log", "-1"]),
+                   ("commit (one child: maintenance)", ["commit", "-q", "--allow-empty", "-m", "x"]),
+                   ("alias !git log (one child)", ["l"]), ("alias with three children", ["three"])]:
+    print(f"{name:34} raw {run(args, raw):4.0f} ms   wrapped {run(args, wrapped):4.0f} ms")
+```
+
+A recursive clone, the
 real git alone then behind each copy, child gits included:
 
 ```python

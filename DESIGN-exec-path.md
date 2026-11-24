@@ -1,13 +1,13 @@
-# gitblocker at git's exec path — design draft
+# gitblocker at git's exec path — the child-process barrier
 
-Branch `exec-path-wrap`, 2026-10-26. A working document: it will be reworked
-here and merged into DESIGN.md once the implementation has settled. Steps 1
-to 3 and 5 of the plan (section 8) are implemented on the branch and green
-on macOS (git 2.50) and on the Debian VM with the system-wide diversion
-(git 2.47.3); step 4's `.deb` came on 2026-11-12 (`packaging/deb/`,
-`ci/build-deb.sh`, replayed by `ci/test-deb.sh`).
-Correction found while testing, section 6: `ls-files` and `grep` with
-`--recurse-submodules` do run the nested repository's config in-process.
+The second file of the design record: how gitblocker judges the
+repositories git enters during a command. DESIGN.md, "Nested
+repositories", tells what came before and gives the summary; the detail
+is here. Written on 2026-10-26 as the draft of a branch, implemented and
+merged since; the marker was redone after the fifteenth and sixteenth
+adversarial passes ([101]–[124]) and the text follows the code. Sections
+1 to 7 are cited by number from the tests, the catalogue and DESIGN.md:
+those numbers do not move.
 
 ## 1. The problem this solves
 
@@ -21,17 +21,17 @@ the `git` of the user's PATH: `setup_path()` (`exec-cmd.c`) puts the
 child is `<exec-path>/git` — `/usr/lib/git-core/git` on Debian,
 `/opt/homebrew/libexec/git-core/git` with Homebrew — the real binary. A
 `git → gitblocker` symlink ahead of the PATH wraps the first process of a
-command and none of its children. DESIGN.md says it in one line ("only
-covers invocations that go through the wrapper"); the line hides a family.
+command and none of its children. DESIGN.md said it in one line ("only
+covers invocations that go through the wrapper"); the line hid a family.
 
-gitblocker has emulated the child's judgment from the parent: a gitlink
+Until this design gitblocker emulated the child's judgment from the parent: a gitlink
 barrier in the index ([14]), then a `-c diff.ignoreSubmodules=dirty` switch
 when a command brings a gitlink ([66]), then the list of commands that
 bring one ([77]), then autocorrect ([78]), then the inversion to a closed
 exemption ([86]), and still [89] (`--submodule=diff`) open, [95]
 (`maintenance` reading an include the command just checked out) open.
 Each step guessed the routes by which git enters; each review found one
-more. Thirteen catalogue entries are this family: [6] [7] [14] [24] [36]
+more. Thirteen catalogue entries were this family then: [6] [7] [14] [24] [36]
 [60] [66] [77] [78] [86] [87] [89] [95].
 
 **Experiment (Debian 13 VM, git 1:2.47.3, 2026-10-26).** `/usr/bin/git` was
@@ -44,7 +44,8 @@ The 210 failures are three classes, all design (section 6), none a flaw of
 the idea. Per-child cost on a trusted repository, same gitblocker as parent
 and child: `log -1` 26 ms (no child), `commit` 26 → 50 ms (one child), an
 alias with three children 27 → 101 ms. About 25 ms per child on the VM,
-the Python floor plus the check; ~35 ms expected on macOS.
+the Python floor plus the check; ~35 ms expected on macOS then (measured
+since: section 6).
 
 ## 2. The model
 
@@ -53,19 +54,19 @@ the Python floor plus the check; ~35 ms expected on macOS.
 > at entry, by the gitblocker that is its first process there. What a command
 > writes into a judged repository is judged at the next command.
 
-The first sentence is today's gitblocker. The second replaces the guessing:
-there is no longer a question "will this command enter a submodule?" —
+The first sentence is what gitblocker always did. The second replaces the
+guessing: there is no longer a question "will this command enter a submodule?" —
 whatever enters, enters through gitblocker. The third sentence is the
 boundary kept on purpose: [44] (a tracked hook checked out, then run) and
 [95] (a tracked include checked out, then read by the `maintenance` child)
 are the same repository, the same command; they stay accepted limitations
 (section 5).
 
-What it replaces, to be removed once the install is verified (section
-3.8): `with_ignored_submodule_dirt`, `SWITCH_EXEMPT`, `exempt_from_switch`,
-the alias reading done for the switch in `_alias_parts`/`_shell_alias_words`
-(the alias reading for the `-c` pairs, [80], stays), `EXEMPT_FORMS` and the
-exemption tests in `test_claims.py`. What stays, unchanged: discovery,
+What it replaced, all removed: `with_ignored_submodule_dirt`,
+`SWITCH_EXEMPT`, `exempt_from_switch`, the alias reading done for the
+switch in `_alias_parts`/`_shell_alias_words` (the alias reading for the
+`-c` pairs, [80], stays), `EXEMPT_FORMS` and the exemption tests in
+`test_claims.py`. What stays, unchanged: discovery,
 `ConfigScan`, the fingerprint, the structural refusals — `check_nested_git`
 included: a gitlink in the index naming a repository whose gitdir is not
 under `modules/` is still refused by the parent, with the message and the
@@ -75,15 +76,15 @@ way out, before any child has to refuse it.
 
 ### 3.1 Invocation names
 
-`main` switches to exec mode on three shapes of `argv[0]`: `git` (today),
-a `TRANSPORT` name (today: `git-receive-pack`, `git-upload-pack`,
+`main` switches to exec mode on three shapes of `argv[0]`: `git`,
+a `TRANSPORT` name (`git-receive-pack`, `git-upload-pack`,
 `git-upload-archive`, passed to the real git without a check), and any
-`git-<cmd>` (new: the exec path's 160 dashed builtins are symlinks to `git`
+`git-<cmd>` (the exec path's 160 dashed builtins are symlinks to `git`
 in the same directory, Debian and Homebrew alike; `git-status --short`
 becomes `status --short`). A shebang script sees in `sys.argv[0]` the path
 the kernel execed, so the basename is the name git used.
 
-`real_git()` already prefers a `git.real` next to the invoked path: with
+`real_git()` prefers a `git.real` next to the invoked path: with
 the divert layout that is `/usr/lib/git-core/git.real` for a child and
 `/usr/bin/git.real` for the user's command. No recursion: the real git's
 exec path is compiled in (Debian builds without `RUNTIME_PREFIX`, checked:
@@ -208,7 +209,9 @@ one way: "the same gitdir must have the same root" refused every
 remove` run a hook the sandbox wrote in the linked worktree ([120]). A
 trusted alias `!git --work-tree=<site> checkout -f main` with a relative
 hooksPath is still judged at `<site>` ([111]). Linked worktrees keep their
-own trust key for the **user's** commands, as before.
+own trust key for the **user's** commands, as before; since [154] a tree
+never trusted takes there the trust of the repository that holds its
+gitdir (DESIGN.md, "Trusted with the repository that holds the gitdir").
 
 ### 3.4 Two more marker values
 
@@ -311,26 +314,17 @@ them).
 
 ### 3.7 Verifying the wrap
 
-The switch and the exemption are removed; a machine whose exec path is not
-wrapped would then be *less* protected than today ([66] open). So the wrap
-is a precondition gitblocker checks, at `trust`, `retrust` and `list` (where
-`check_safe_bare` already warns): `<exec-path>/git` must resolve to
-gitblocker itself, the exec path being `GIT_EXEC_PATH` if set, else what the
-real git answers to `--exec-path`. That is one run of the real git without
-a repository, the same class as `git --version` (no `RUN_SETUP`), and the
-only git gitblocker ever runs. Not on every command: a warning repeated a
-hundred times is ignored. Whether an unwrapped exec path is a warning or a
-refusal to `trust` is open (section 9).
-
-### 3.8 Order of the changes
-
-1. The marker (3.2), the coverage rule (3.3), `new` and the served repository (3.4),
-   the child behaviour (3.5), the passthroughs (3.6), the `git-<cmd>` name
-   (3.1): gitblocker works both wrapped and unwrapped.
-2. The verification (3.7) and the Debian install (section 4).
-3. The tests (section 7) on the wrapped VM.
-4. Only then, the removal of the switch and the exemption, and the
-   rewriting of "Nested repositories" in DESIGN.md.
+The switch and the exemption are removed: a machine whose exec path is not
+wrapped is *less* protected than before this design ([66] open). So the wrap
+is a precondition gitblocker checks (`check_wrap`), at `trust`, `retrust`
+and `list` (where `check_safe_bare` already warns): `<exec-path>/git` must
+resolve to gitblocker itself, the exec path being `GIT_EXEC_PATH` if set,
+else what the real git answers to `--exec-path`. That is one run of the
+real git without a repository, the same class as `git --version` (no
+`RUN_SETUP`); with `git_prefix` ([128], DESIGN.md "Which git runs"), the
+only things gitblocker runs git to learn, both about the binary. Not on
+every command: a warning repeated a hundred times is ignored. An unwrapped
+exec path is a warning, not a refusal to `trust` (section 8).
 
 ## 4. Installation
 
@@ -339,8 +333,7 @@ refusal to `trust` is open (section 9).
 The mechanism Debian provides for one package to replace a file of
 another: dpkg records the diversion and, on every upgrade of `git`,
 installs the new binary at the diverted name, never over gitblocker.
-`/usr/bin/git` is already diverted this way on the VM (`--package
-gitblocker`, since 2026-10-19). The exec path needs the same:
+`/usr/bin/git` is diverted this way; the exec path needs the same:
 
 ```sh
 dpkg-divert --package gitblocker --add --rename \
@@ -386,32 +379,25 @@ GUI apps, the shell profile for terminals). `git.real` is not optional: a
 GUI app's PATH holds only Apple's git, which became the real one without
 it ([119]). The trust-time verification (3.7) says when it is stale:
 entries of the real exec path missing, or links to nothing. Weaker than Debian:
-a process that does not inherit the variable has unwrapped children, i.e.
-today's protection. The same shim is the test tool for experiments without
+a process that does not inherit the variable has unwrapped children: none
+of them judges the repository it enters. The same shim is the test tool for experiments without
 root (it is how the per-child numbers above were measured), and the
 per-user install on Linux (README, "Per user"); `_core_exec_path` takes
 `git.real` of the real exec path when the diversion left one, whatever
 gitblocker that path's `git` is.
-
-### 4.3 The VM
-
-`/usr/bin/gitblocker` on the VM is the version of 2026-10-19: it still hashed
-the global config ([56] was fixed after). Mixing it with the current
-script gives false "changed: added global:…" refusals. Update it before any
-system-wide replay; keep the `git.real` layout.
 
 ## 5. What it closes, what it does not
 
 | | entries | after |
 |---|---|---|
 | git enters another repository through a child | [6] [7] [14] [24] [36] [60] [66] [77] [78] [86] [87] | covered twice: the parent's structural refusals, the child's refusal at entry |
-| the submodule content diff | [89] | **closed** (XPASS on the VM); the accepted-limitation text and the `trust` warning go |
+| the submodule content diff | [89] | **closed** (XPASS on the VM); the accepted-limitation text and the `trust` warning are gone |
 | a tracked include read by the `maintenance` child | [95] [123] | **stays**: same repository, same command (section 2). Joins [44] as an accepted limitation; `trust` names every file the config names in the tree. A re-check by the child was tried and reverted ([124]) |
 | an active submodule entered in-process (`submodule.active` pathspec, `grep --recurse-submodules <tree>`) | [126] | **disarmed** (2026-10-30): `core.fsmonitor=false` pinned through `GIT_CONFIG_PARAMETERS` on every git gitblocker runs (`PINNED_CONFIG`, DESIGN.md "The command that writes what it then reads"); by-name activation stays hashed and refused; `GITBLOCKER_KEEP_FSMONITOR` reopens it, with the `trust` warning |
 | tracked hooks, sh readings | [44] [71] [74] | unchanged |
-| everything else (fingerprint scope, parsers, discovery, options, remotes, FPs) | ~75 | unchanged, untouched |
+| everything else (fingerprint scope, parsers, discovery, options, remotes, FPs) | the rest of the catalogue | unchanged, untouched |
 
-New coverage with no catalogue number yet: a trusted hook or alias that
+New coverage with no catalogue number: a trusted hook or alias that
 runs `git` in another repository; a tool that calls the exec path's `git`
 directly; `git submodule foreach` with any command.
 
@@ -421,8 +407,8 @@ documented the loss).
 
 ## 6. Risks and costs
 
-- **The barrier becomes a claim about git.** Today gitblocker guesses the
-  *routes*; tomorrow it assumes git enters a repository *through a
+- **The barrier is a claim about git.** gitblocker used to guess the
+  *routes*; it now assumes git enters a repository *through a
   process*. Better, still a claim, and git's trend runs against it:
   `ls-files --recurse-submodules`, `grep --recurse-submodules` and `diff
   --submodule=log` already read the child repository **in-process**
@@ -449,10 +435,13 @@ documented the loss).
   of the in-process entries with, for each, whether it runs the nested
   config and what bars the activation. Replayed at each git release,
   like `tests/inventory/`.
-- **Cost per child**: 25 ms on the VM, ~35 ms on macOS, inheritance
-  included (the Python floor dominates). `pull` ≈ +3 children, `status`
-  with N submodules +N, `filter-branch` and `bisect run` hundreds. Accepted
-  for the transition; a Rust port removes it (floor ~2 ms).
+- **Cost per child**: 25 ms on the Debian VM when first measured
+  (2026-10-26); ~50 ms on macOS on 2026-11-24 (PERF.md, "Child gits"),
+  inheritance included: a child skips the check and pays what its parent
+  pays to start, the interpreter and the compilation of the script (about
+  23 ms of it there). `pull` ≈ +3 children, `status` with N submodules +N, `filter-branch`
+  and `bisect run` hundreds. Accepted; a Rust port would remove it
+  (floor ~2 ms).
 - **Fail-closed failure modes** to keep in mind: a transport passthrough
   without its marker breaks every ssh push to the host; a stale macOS
   shim after `brew upgrade` breaks every child ("no git"); a mixed install (old script in
@@ -466,7 +455,7 @@ documented the loss).
 - **IDE polling**: an IDE running `git status` every few seconds in a
   repository with a planted nested repository produces one refused child
   per poll; `update_pending` dedups by key, the notification is not sent by
-  children, stderr goes to the IDE's log. Same volume as today's parent
+  children, stderr goes to the IDE's log. Same volume as a parent's
   refusals.
 - **Partial commands**: a child refused mid-command leaves git's own state
   as git left it (a `checkout` whose submodule summary failed has already
@@ -486,8 +475,8 @@ documented the loss).
   repository, child refused, payload not run; and the unwrapped control,
   payload run); the in-process entries run nothing of the child's config
   (one parametrised test per `repo_submodule_init` command); the marker is
-  rejected when expired or for another key, and never read from a
-  repository (environment only).
+  rejected when the process that set it is gone or for another repository,
+  and never read from a repository (environment only).
 - `test_commands.py`: the positive controls of [66] [77] [86] [89] invert
   (the real git with wrapped children does not run the payload; with raw
   children it does); `clone --recurse-submodules`, `submodule add`,
@@ -495,40 +484,31 @@ documented the loss).
   bare remote, an ssh-shaped `git-receive-pack` with children: all
   complete; a child never prompts (pty test: the parent holds the tty, the
   child refuses at once) and never waits.
-- `test_legit.py`: `status` with ten submodules, `submodule foreach`,
-  `filter-branch` on a small history: silent, and their timings recorded
-  in PERF.md (new table: per-child overhead).
+- `test_legit.py`: `submodule foreach`, `filter-branch` on a small
+  history: silent. The per-child overhead is in PERF.md ("Child gits").
 - The attack corpus: unchanged in content; `test_attacks.py` runs each
   attack under both exec paths.
-- VM replay of the whole suite with the system-wide divert, after the
-  `/usr/bin/gitblocker` update (4.3).
+- The system-wide divert: the package's life (install, an upgrade of git,
+  remove, purge) is replayed by `ci/test-deb.sh` at every push (DESIGN.md,
+  "Deployment"); the whole suite under the divert was replayed by hand on
+  a Debian VM (git 2.47.3, 2026-10-26).
 
-## 8. Work plan
+## 8. Decisions
 
-| step | content | size |
-|---|---|---|
-| 1 | marker (3.2); coverage rule (3.3); `new`/served (3.4); child behaviour (3.5); passthroughs (3.6); `git-<cmd>` (3.1) — redone after the 15th pass ([101]–[112]): pid lifetime, coverage by `gitdir_roots` | 2 days |
-| 2 | conftest two exec paths; claims tests of section 7 | 1 day |
-| 3 | positive controls inverted, legit scenarios, pty test for children, PERF.md | 1 day |
-| 4 | verification at trust (3.7); Debian install script and `.deb` skeleton; VM update and replay | ½–1 day |
-| 5 | removal of the switch, `SWITCH_EXEMPT`, `exempt_from_switch`, `EXEMPT_FORMS`; DESIGN.md "Nested repositories" rewritten; [89] moved from accepted to fixed, [95] warning on includes in the tree; catalogue entry for this design | ½ day |
+The questions the draft left open, as they were settled.
 
-Step 1 alone leaves gitblocker working on an unwrapped machine exactly as
-today; the removal in step 5 is the only step that requires the install.
-
-## 9. Open questions
-
-1. *Decided 2026-10-27*: unwrapped exec path at `trust` is a warning
+1. *2026-10-27*: an unwrapped exec path at `trust` is a warning
    (`check_wrap`), no refusal, no switch standing in: the wrap is the
    install, a fallback that is sometimes on would make the protection
    depend on an install detail nobody sees, and refusing `trust` would
    break macOS while the wrap there is fragile.
-2. *Decided 2026-10-27*: no TTL. The marker lives with the process that
+2. *2026-10-27*: no TTL. The marker lives with the process that
    set it (3.2, [104]).
-3. *Decided 2026-10-27*: worktree children inherit the main repository's
+3. *2026-10-27*: worktree children inherit the main repository's
    judgment for their gitdir, and for their tree only what the parent
-   hashed (3.3, [120]); no third auto-trust path.
-4. *Decided*: the `-c diff.ignoreSubmodules=dirty` switch is removed (see 1).
-5. The Rust port: not a condition of this design, but the per-child floor
-   is its first concrete justification. Not before the design has settled
-   on this branch.
+   hashed (3.3, [120]); no third auto-trust path. (A linked worktree the
+   user types git in takes its holder's trust since [154]: DESIGN.md,
+   "Trusted with the repository that holds the gitdir".)
+4. The `-c diff.ignoreSubmodules=dirty` switch is removed (see 1).
+5. The Rust port: not a condition of this design, but the per-child
+   floor (section 6) is its first concrete justification.

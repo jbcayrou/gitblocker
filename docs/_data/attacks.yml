@@ -2,8 +2,11 @@
 # terminal without gitblocker, the host terminal with gitblocker.
 # A line is {c: class, s: text}; class is one of p (prompt), dim, pwn, add, mod,
 # x, w, hint, hr, or empty. `refuse` builds the standard refusal block
-# (rule, "has changed" line, the changes, an optional diff, rule, hints) —
-# see _includes/attacks.html; `with` gives the host lines in full instead.
+# (rule, "has changed" line, the changes, an optional diff, rule, the
+# question answered n, hints) — see _includes/attacks.html; `with` gives the
+# host lines in full instead. The lines are what gitblocker prints on Linux,
+# paths shortened to ~: a tab of the config is shown as `?` (as every
+# control character but a newline is), a quote as git wrote it in the file.
 - id: hook
   label: A hook
   story: "The sandbox drops an executable file into .git/hooks/. git runs pre-commit, pre-push and a dozen others with no prompt, every time."
@@ -42,17 +45,19 @@
     diff:
       - { c: "", s: "" }
       - { c: "", s: "  diff of ~/work/api/.git/config:" }
-      - { c: hint, s: "  @@ -5,3 +5,4 @@" }
-      - { c: "", s: "   \tignorecase = true" }
-      - { c: "", s: "   \tprecomposeunicode = true" }
-      - { c: add, s: "  +\tfsmonitor = sh -c \"...\"" }
+      - { c: hint, s: "  @@ -3,3 +3,4 @@" }
+      - { c: "", s: "   ?filemode = true" }
+      - { c: "", s: "   ?bare = false" }
+      - { c: "", s: "   ?logallrefupdates = true" }
+      - { c: add, s: "  +?fsmonitor = sh -c \\\"...\\\"" }
 
 - id: hookspath
   label: hooksPath into the tree
-  story: "If the sandbox can only write the work tree, not .git, it still wins: core.hooksPath points git at a hooks directory that lives in the tree."
+  story: "The hook does not have to sit in .git/hooks: one key, core.hooksPath, points git at a directory of the work tree, where the sandbox writes as it pleases."
   sandbox:
     - { c: p, s: "$ mkdir .githooks" }
     - { c: p, s: "$ printf '...' > .githooks/pre-push" }
+    - { c: p, s: "$ chmod +x .githooks/pre-push" }
     - { c: p, s: "$ git config core.hooksPath .githooks" }
   without:
     - { c: p, s: "$ git push" }
@@ -66,9 +71,11 @@
     diff:
       - { c: "", s: "" }
       - { c: "", s: "  diff of ~/work/api/.git/config:" }
-      - { c: hint, s: "  @@ -5,3 +5,4 @@" }
-      - { c: "", s: "   \tprecomposeunicode = true" }
-      - { c: add, s: "  +\thooksPath = .githooks" }
+      - { c: hint, s: "  @@ -3,3 +3,4 @@" }
+      - { c: "", s: "   ?filemode = true" }
+      - { c: "", s: "   ?bare = false" }
+      - { c: "", s: "   ?logallrefupdates = true" }
+      - { c: add, s: "  +?hooksPath = .githooks" }
 
 - id: nested
   label: A nested repository
@@ -86,18 +93,19 @@
     - { c: p, s: "$ git add -A" }
     - { c: dim, s: "warning: adding embedded git repository: vendor/lib" }
     - { c: p, s: "$ git status" }
-    - { c: hr, s: "────────────────────────────────────────────────────────" }
-    - { c: x, s: "✗ gitblocker: nested repository: vendor/lib/.git — a gitlink for this" }
-    - { c: x, s: "  directory exists in the index, git will execute its config." }
-    - { c: dim, s: "  If it is your own vendored repository: inspect its config and hooks," }
-    - { c: dim, s: "  declare it in .gitmodules, git submodule absorbgitdirs, gitblocker trust." }
-    - { c: dim, s: "  Otherwise delete vendor/lib/.git first, then git rm --cached lib." }
-    - { c: x, s: "✗ gitblocker: refusing to run git." }
+    - { c: x, s: "✗ gitblocker: nested repository: ~/work/api/vendor/lib/.git — a gitlink" }
+    - { c: x, s: "  for this directory exists in the index (a plain `git add -A` creates" }
+    - { c: x, s: "  one), git will execute its config. If it is your own vendored" }
+    - { c: x, s: "  repository: inspect ~/work/api/vendor/lib/.git/config and […]/hooks," }
+    - { c: x, s: "  declare it in .gitmodules, run `git submodule absorbgitdirs --" }
+    - { c: x, s: "  vendor/lib` […], then `gitblocker trust` […]. Otherwise delete" }
+    - { c: x, s: "  vendor/lib/.git first, then `git rm --cached vendor/lib`." }
 
 - id: redirect
   label: A redirected .git
   story: "The boldest move: replace .git with a one-line gitdir: file pointing at a directory the sandbox controls, config and hooks included."
   sandbox:
+    - { c: p, s: "$ mkdir evil" }
     - { c: p, s: "$ cp -r .git evil/repo.git" }
     - { c: p, s: "$ rm -rf .git" }
     - { c: p, s: "$ echo 'gitdir: ./evil/repo.git' > .git" }
@@ -108,5 +116,4 @@
   with:
     - { c: p, s: "$ git log --oneline -1" }
     - { c: x, s: "✗ gitblocker: ~/work/api/.git points inside the work tree" }
-    - { c: dim, s: "  (~/work/api/evil/repo.git)" }
-    - { c: x, s: "✗ gitblocker: refusing to run git." }
+    - { c: x, s: "  (~/work/api/evil/repo.git)" }

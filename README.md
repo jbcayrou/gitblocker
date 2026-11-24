@@ -21,6 +21,12 @@ booby-trapped directory, plant a nested repository… The next time *you* run
 `git` on the host, that code runs with your rights: SSH keys, credentials,
 shell. That is the sandbox-to-host pivot.
 
+The same goes for a directory that never saw a sandbox: an archive you
+unpack, a folder copied from another machine, with a `.git` inside. The
+files are yours, so git's `safe.directory` check says nothing, and the
+first `git status` there — your prompt's — runs what its config names.
+gitblocker refuses it as never trusted until you have looked.
+
 Sandboxing layers (AppArmor/seccomp profiles, a global `core.hooksPath`,
 `safe.bareRepository=explicit`, rootless uid mapping) prevent some of it.
 gitblocker **detects** the rest: it refuses to run git until you have looked.
@@ -50,15 +56,20 @@ through the `PATH` is then wrapped — prompts, `command git`, scripts, and
 editors started from a shell (VS Code resolves your login shell's
 environment at startup, even when launched from the Dock).
 
-Still outside: a tool with a hardcoded `/usr/bin/git`, a GUI started by a
-launcher with a minimal `PATH`, and the git that hooks or `rebase --exec`
-run (the real git puts its own exec path first). For VS Code, set `git.path`
-to the gitblocker symlink to remove the doubt. Tools built on libgit2 rather
-than the git binary do not run hooks or config commands and are outside this
-picture.
+Still outside a `PATH` symlink: a tool with a hardcoded `/usr/bin/git` and
+a GUI started by a launcher with a minimal `PATH` (the system-wide install
+covers both), and the git another git runs — a hook's, `rebase --exec`'s,
+the one it sends into a submodule: the real git puts its own exec path
+first, which is why the install wraps that directory too. For VS Code, set
+`git.path` to the gitblocker symlink to remove the doubt. Tools built on
+libgit2 rather than the git binary do not run hooks or config commands and
+are outside this picture.
 
-Cost: one check per invocation, ~33 ms, whatever the size of the tree
-(see `PERF.md`). A prompt that calls git three times pays ~100 ms. In a
+Cost: one check per invocation, ~50 ms on a recent laptop, whatever the
+size of the tree: most of it Python starting and compiling the script,
+the check itself a few milliseconds (see `PERF.md`). A prompt that calls
+git three times pays ~150 ms, and a command pays it once more for each
+child git it runs (`git commit`: one). In a
 repository you have not trusted, or whose trusted files changed, those calls
 are refused: the prompt shows no git information until you have decided.
 That silence is the signal.
@@ -99,8 +110,9 @@ deviation, structural anomaly (symlinked `.git`, bare gitdir planted in a
 subdirectory, undeclared nested repository, `exec` lines injected into a
 rebase todo, an index entry whose name escapes the work tree — `.git/hooks/x`,
 `../x`, which `checkout -- .` and `restore` would write as is —, control
-characters in names…) or unknown repository → git is not run. The config is parsed by a port of git's own parser, never by
-calling `git config`: git would honour the config being judged.
+characters in names…) or unknown repository → git is not run. The config
+is parsed by a port of git's own parser, never by calling `git config`:
+git would honour the config being judged.
 
 The fingerprint lives in `~/.local/state/gitblocker/`, outside any mounted
 volume, with a backup of the watched files so `gitblocker restore` can put
@@ -276,16 +288,17 @@ several at once (a worktree created by another git, an IDE's bundled one,
 is asked about once). One thing is refused there: a path that goes through
 a symlink sitting in the repository or beside it (`.claude/worktrees →
 …`) — git would check the branch out, or delete, wherever it leads; name
-the real directory instead. A submodule or a
-linked worktree needs no trust of its own: the first git run there takes
-the trust of the repository that holds it, and says so (`trusted with …`),
-and again whenever that repository's reference has moved. A branch created
-in a submodule (`checkout -b`, `push -u`) asks nothing, there or in the
+the real directory instead. A submodule or a linked worktree needs no
+trust of its own: the first git run there takes the trust of the
+repository that holds it, and says so (`trusted with …`), and again
+whenever that repository's reference has moved. A branch created in a
+submodule (`checkout -b`, `push -u`) asks nothing, there or in the
 superproject.
-When a command finds the repository changed, one of three things happens.
 
 `git --version` is never checked: it reads no repository, and the tools
 that run it first (lazygit, fugitive) took a refusal for an old git.
+
+When a command finds the repository changed, one of three things happens.
 
 **Auto-accept: the change is one git or your editor made itself.**
 gitblocker re-trusts on its own, prints one line and runs git. See the next
@@ -319,7 +332,9 @@ $ gitblocker pending ~/work/api
     git waiting (pid 41250, 6s): code[40988] ← systemd[1]
       /usr/share/code/code --type=utility
 ────────────────────────────────────────────────────────
+! gitblocker: /home/user/work/api/.git has changed since the last trust
   added     hooks/pre-commit
+
 ────────────────────────────────────────────────────────
 Allow: record this state and let the waiting git run? [y/N] n
 ! gitblocker: refused: the waiting git is not run; the record is cleared. If malicious:  gitblocker restore
@@ -424,8 +439,13 @@ powerlevel10k keeps showing branch and status, since `gitstatusd` reads
 `.git` directly and never runs git, which is harmless; lazygit exits with
 gitblocker's message, tig says "Not a git repository"; fugitive's `:Git`
 shows the refusal after `GITBLOCKER_WAIT` (its first git is a job without a
-terminal, which waits); pre-commit's hook runs with the real git, and the
-`pre-commit install` that rewrote the hook is what asks for a `trust`.
+terminal, which waits).
+
+With pre-commit, the `pre-commit install` that writes the hook is what
+asks for a `trust`. Once the exec path is wrapped, the gits the hook runs
+afterwards are gitblocker too, children of the `git commit` that was
+checked: they ask nothing in that repository, and judge any other one
+they enter.
 
 To try the waiting path by hand, start a git with no controlling terminal.
 `nohup` and `&` keep the terminal; `setsid` detaches on Linux, and on macOS,
@@ -441,11 +461,17 @@ gitblocker pending ~/work/api      # decide; then read /tmp/git.log
 
 ### After upgrading gitblocker
 
-A new version may change what the fingerprint contains; `gitblocker list`
-then shows the repositories as "legacy". `gitblocker retrust` re-validates in
-bulk the ones that are unchanged and skips the modified ones. Installed at
-the same path, the new version is what the exec path's `git` already
-links to; nothing else to redo.
+A new version may change what the fingerprint contains. The references
+taken before are then of another format, compared with nothing: git is
+refused in each repository ("trusted by an older version") and `gitblocker
+list` shows them as "legacy". `gitblocker retrust` records the present
+state of each of them in bulk, **unseen and without a comparison** — there
+is nothing to compare with, so a change made since the last trust is
+recorded with the rest. Where that matters, `gitblocker trust` after a
+look, one repository at a time. A repository whose reference is of the
+current format and that has changed is skipped. Installed at the same
+path, the new version is what the exec path's `git` already links to;
+nothing else to redo.
 
 ### Dotfiles, vcsh, yadm: a gitdir kept apart from its tree
 
@@ -474,11 +500,11 @@ repository using that directory.
 | `gitblocker diff` | Show what differs from the reference. |
 | `gitblocker restore [-y]` | Put the watched files back into the reference state. Refused when `.git` no longer leads to the git directory that state was taken from: nothing is written into another repository. |
 | `gitblocker git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`, `-c`. |
-| `gitblocker list` | Registered repositories and their status (ok / modified / structure / missing / legacy / unknown). |
+| `gitblocker list` | Registered repositories and their status (ok / modified / structure / missing / unreadable / legacy / unknown). |
 | `gitblocker pending [<repo>… \| -a \| -c <repo>…]` | Decisions waiting for a git blocked by a program: list, review and allow/refuse, or clear. |
 | `gitblocker forget <repo>…` / `--missing` | Remove entries; the repository becomes "never trusted" again. `<repo>` is its directory, or its gitdir when kept apart. |
 | `gitblocker prune` | Same as `forget --missing`. |
-| `gitblocker retrust` | Re-validate unchanged repositories after an upgrade. |
+| `gitblocker retrust` | After an upgrade: record the present state of every repository listed as ok or legacy, in bulk; a modified one is skipped. See "After upgrading gitblocker". |
 | `gitblocker version` | The version, which is the package's. |
 | `gitblocker exec-path [<dir>]` | Build or rebuild an exec path whose `git` is gitblocker, for `GIT_EXEC_PATH` (default `~/.local/lib/gitblocker-exec`). |
 
@@ -490,7 +516,7 @@ works); refusals and diagnostics go to stderr.
 | Variable | Effect |
 |---|---|
 | `GITBLOCKER_STATE` | State directory (default `$XDG_STATE_HOME/gitblocker`, i.e. `~/.local/state/gitblocker`). Never inside a mounted volume. |
-| `GITBLOCKER_REAL_GIT` | Path to the real git (default: a `git.real` next to gitblocker, else the first `git` in the PATH that is not gitblocker itself). Changing the real git changes its system config, hence the fingerprint: one `trust`. |
+| `GITBLOCKER_REAL_GIT` | Path to the real git (default: a `git.real` next to gitblocker, else the first `git` in the PATH that is not gitblocker itself). |
 | `GITBLOCKER_ALLOW_REBASE_EXEC=1` | Allow `exec` lines in rebase todo files, and a merge strategy that is not one of git's builtins (`rebase-merge/strategy`, `sequencer/opts`). |
 | `GITBLOCKER_NO_PROMPT=1` | Never ask on the terminal; refuse directly. |
 | `GITBLOCKER_WAIT` | Seconds a git without a terminal waits for `gitblocker pending` (default 60, 0 = never). |
@@ -552,7 +578,8 @@ refused (git itself reads it against two different directories in one run).
   refused.
 
 `DESIGN.md` holds the design notes, the review method and the catalogue of
-the 99 bypasses and false positives found so far (`tests/attacks/`).
+the bypasses and false positives found so far, more than 170 of them
+(`tests/attacks/`).
 
 ## Tests
 

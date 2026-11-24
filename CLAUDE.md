@@ -9,9 +9,11 @@ the host runs it. gitblocker is detection; `safe.bareRepository=explicit` and
 a global `core.hooksPath` are the prevention layers it assumes.
 
 **`DESIGN.md` is the design record** (threat model, every check and why,
-ruled-out alternatives, the catalogue of 142 bypasses). Read the section named below
-before touching the matching code; it is long because every paragraph was
-paid for by a bypass.
+ruled-out alternatives, the review passes behind the numbered catalogue of
+bypasses and false positives, `tests/attacks/__init__.py`); its second
+file, `DESIGN-exec-path.md`, holds the child gits: the marker, what it
+covers, the install. Read the section named below before touching the
+matching code; it is long because every paragraph was paid for by a bypass.
 
 ## Rules that are not up for discussion
 
@@ -59,9 +61,11 @@ paid for by a bypass.
   index, todo files: all read by gitblocker's own ports of git's readers
   (`find_root`, `parse_git_config`, `index_gitlinks`, `_read_path_file`…).
   `git rev-parse`/`git config` would honour the config being judged. The
-  one git gitblocker runs to learn anything is `git_prefix` ([128]): a
+  one git a check runs to learn anything is `git_prefix` ([128]): a
   constant of the binary, asked from `/` with no repository, no user
   config and no GIT_* variable — never anything about a repository.
+  (`check_wrap`, at `trust`, `list` and `retrust`, and `gitblocker
+  exec-path` ask the same binary its `--exec-path`.)
 - **Read every file exactly as git does.** Bytes, git's `isspace`, one
   trailing newline, no `strip()`/`splitlines()`; a line git dies on is
   refused, not reinterpreted. Every reader has a parity test with git as
@@ -124,8 +128,8 @@ paid for by a bypass.
 gitblocker              check; exit 1 if suspect or never trusted
 gitblocker trust | diff | restore [-y]
 gitblocker git <args>   check, then exec the real git (symlink `git → gitblocker`
-                        switches to this mode); clone/init auto-trust; branch
-                        tracking auto-accepted; other changes: diff + [y/N] on /dev/tty
+                        switches to this mode); clone/init auto-trust; the closed
+                        auto-accept list accepted; other changes: diff + [y/N] on /dev/tty
 gitblocker list | forget <repo>… | --missing | prune | retrust
 gitblocker pending [<repo>… | -a | -c <repo>…]   decisions of terminal-less gits
 gitblocker exec-path [<dir>]   (re)build an exec path whose git is gitblocker (macOS, no root)
@@ -166,7 +170,7 @@ are honoured as git honours them.
 | child gits: the marker (pid + start + judged gitdir/common/root/label), coverage by `gitdir_roots` and `tree_named`, `new`, the served repository, no detach, the exec-path wrap, its check and its macOS shim | `Judged`, `_ancestors`, `_proc_lineage`, `read_judged`, `set_judged`, `NewRepo`, `_served_repository`, `keep_attached`, `check_wrap`, `cmd_exec_path`, `PATH_QUERIES`, `run_git` | Nested repositories; DESIGN-exec-path.md |
 | performance | PERF.md | Nested repositories (end) |
 | what git writes then reads in one command ([44] [66] [77] [86] [88] [95] [123] [124]); what it reads in-process ([126]) | `Judged.covers`, `_hard_link`, `check_links_into_gitdir`, `PINNED_CONFIG`, `pin_config_env`, `_git_maybe_bool` | The command that writes what it then reads |
-| accepted limitations [44], [71], [74], [126], [179], out-of-scope cases | — | Known limitations |
+| accepted limitations [44], [71], [74], [95], [123], [126], [129], [158]–[162], [179], out-of-scope cases | — | Known limitations |
 
 ## Tests
 

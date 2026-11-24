@@ -32,7 +32,8 @@
 {%- endif %}
 <span></span>
 <span class="hr">{{ rule }}</span>
-<span class="hint">  If legitimate:  gitblocker trust   Otherwise:  gitblocker restore</span>
+<span class="w">Trust this state and run git? [y/N]</span> n
+<span class="hint">  If legitimate:  gitblocker trust      Otherwise:  gitblocker restore</span>
 <span class="x">✗ gitblocker: refusing to run git.</span>
 {%- endif -%}
 {%- endcapture %}
