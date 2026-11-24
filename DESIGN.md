@@ -1016,7 +1016,15 @@ with <holder>: <tree>`) and from then on has its own reference, when:
   submodule's `core.worktree`, both in the holder's reference. A copy of a
   trusted gitfile planted in another directory (`src/.git`) reaches the
   same gitdir, and every file it watches is in the reference: git run from
-  there would work on another HEAD and another index, silently;
+  there would work on another HEAD and another index, silently. Named
+  **by its real path** (`_as_written`, [171]): compared after resolving
+  symlinks, the path the pointer names was that planted directory as soon
+  as the real tree was swapped for a symlink to it — a second write, no
+  hashed byte — and `sup/src` was "trusted with" the superproject: the
+  user's `add -A`, `commit`, `push` there put the superproject's files on
+  the submodule's remote. git writes a worktree's `gitdir` resolved and a
+  module's `core.worktree` relative to a gitdir that is real: a symlink
+  on the way is not git's;
 - **every watched file is in the holder's reference**, same content and
   mode, at the same absolute path — or, for what the config names in a
   linked worktree's tree (a relative `core.hooksPath` resolves there,
@@ -1137,13 +1145,23 @@ other two for a git that is not the child of another, `interactive`):
    acceptance is tied to **the command gitwary runs**, not to the state
    found: for those four subcommands, in the main repository, on a
    reference just found current, gitwary waits for git as it does for a
-   clone and looks at what moved. Accepted when the difference is that
-   command's own — `add`: one worktree, both pointers new; `move`: one,
-   `gitdir` rewritten; `remove`: one gone; `prune`: some gone, the
-   directory `worktrees/<id>` with them — when `commondir` is git's
-   `../..` and `gitdir` an absolute `<tree>/.git` whose gitfile names the
-   same `worktrees/<id>` back, and when anything else that moved is the
-   branch tracking above (`add -b x <path> origin/main`). Otherwise
+   clone and looks at what moved — whatever git's exit status: a
+   post-checkout hook that fails in the fresh tree leaves the worktree in
+   place and its status to git ([175]). Accepted when the difference is
+   that command's own — `add`: one worktree, both pointers new; `move`:
+   one, `gitdir` rewritten; `remove`: one gone; `prune`: some gone, the
+   directory `worktrees/<id>` with them and every entry the reference
+   held under it (a `config.worktree`, the `modules/` of its submodules,
+   [173]), and none that is there afterwards ([176]: "absent before" was
+   all that was asked of one, an addition) — when `commondir` is git's
+   `../..` and `gitdir` a `<tree>/.git`, absolute or relative to
+   `worktrees/<id>` (`--relative-paths`, git 2.48, [174]: its first use
+   also sets `extensions.relativeWorktrees`, asked once), whose gitfile
+   names the same `worktrees/<id>` back, and when anything else that
+   moved is the branch tracking above (`add -b x <path> origin/main`) or,
+   under `extensions.worktreeConfig` (`git sparse-checkout set`), the
+   `config.worktree` git copies into the new worktree — the bytes the
+   reference holds for the main one ([173]). Otherwise
    nothing is recorded and the next command shows it all: a file the
    sandbox wrote meanwhile, a second worktree, a pointer that is not
    git's. The same pointers written by any other git (the sandbox's, an
@@ -1157,7 +1175,37 @@ other two for a git that is not the child of another, `interactive`):
    two references, this worktree's and the main tree's), nor for an
    alias or a child git: asked at the next command, as before. The other
    worktrees in use follow the main tree's reference ([165], previous
-   section).
+   section). **One at a time** (`worktree_lock`, [172]): three `worktree
+   add` started together — a harness starting its tasks — each found the
+   others' pointers beside its own, more than one worktree, and accepted
+   nothing. A lock per repository in the state directory, from the check
+   to the record: the second waits (two minutes at most, then goes on
+   without it) and finds the first one's pointers in the reference.
+   Accepting several worktrees per command instead would have given up
+   "a second one that appeared meanwhile is nobody's command".
+   **A path that goes through a symlink** (`check_worktree_paths`, [169]
+   [170]). These commands write, or delete, where their path arguments
+   lead, and git follows a symlink there. The sandbox swaps a directory
+   for one — `.claude/worktrees`, a neighbour of the repository, the
+   destination itself — and no hashed byte moves: `worktree add` checked
+   the branch out in a directory of the host and the pointer to it was
+   accepted with a line that gave the id, not the path; `move` took a
+   worktree there; with the tree of an accepted worktree swapped, `repair`
+   wrote a `.git` in what the symlink leads to (`~/Documents`), which
+   then took the repository's trust, and `remove --force` deleted it.
+   Before git runs, `git worktree add|move|remove|repair` is refused when
+   one of its path arguments goes through a symlink that sits in the
+   directory holding the main work tree, or below it — what whoever
+   wrote the volume can plant — and `repair` when the tree a trusted
+   pointer names is reached through one. The arguments are found as
+   git's option parser finds them: after `--`, or neither an option nor
+   the value of one (`WORKTREE_ADD_VALUES`, held to git's own usage in
+   `tests/test_claims.py`); for `add` the first only, a branch named like
+   a symlink of the tree is not a path. A symlink elsewhere is the
+   user's and is followed (`~/w → /data/work`); their own symlink beside
+   the repository is refused too, the message names it and its target
+   and the real path is the way out. The write is git's behaviour, and
+   the tree is not walked: only the path the command itself is given.
 2. **Question on the terminal** (`ask_on_tty`): the diff is shown as before,
    then "Trust this state and run git? [y/N]". Read and written on
    **`/dev/tty`**, never on stdin: git will consume stdin (`apply < patch`,
@@ -1478,7 +1526,7 @@ read) and python 3.9 is not offered — the Linux runner is named
 (`ubuntu-24.04`), and Ubuntu 26.04 is tested with its own git. A new git
 enters the matrix with its inventory.
 
-**`python3 -m pytest`** (~1810 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
+**`python3 -m pytest`** (~1830 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
 [160], [161] — accepted limitations; ~410 s, ~70 s with `-n 8` on the command line),
 to run before any change:
 
@@ -2071,6 +2119,22 @@ the files, not the order.
   repositories): never trusted, refused, as the same clone in two
   commands always was. One route closed by a rule that stands without
   the bug, not a protection against it: the fix is to update git.
+- **A symlink above the repository's directory** is not seen by the
+  refusal of a `git worktree` path ([169]): the rule looks at symlinks
+  sitting in the directory that holds the main work tree, or below. With
+  a volume mounted two levels up and a destination in a cousin directory
+  (`../../wts/x`), git follows the planted `wts` as before, and the
+  pointer is accepted. Nor does any of this cover another program that
+  writes through a symlink of the tree: the rule is about the path
+  gitwary's own git is given.
+- **A bare repository with its worktrees beside it** (`proj/.bare`,
+  `proj/main`, `proj/feat`, sometimes a gitfile `proj/.git`): no tree
+  holds the gitdir, so no worktree takes another's trust ([154]) and no
+  `git worktree` command is accepted ([155]) — each worktree is trusted by
+  hand and each `worktree add` asked about, the sum of "bare repositories
+  are not handled" on a layout many worktree users adopt. Likewise a
+  worktree of a submodule: accepted in the submodule, asked in the
+  superproject.
 - gitwary.py has no dependency outside the stdlib (diff via `difflib`); the
   tests need `pytest` and `git`.
 - A context without a terminal and without a desktop session (ssh, cron,

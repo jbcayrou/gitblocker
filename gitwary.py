@@ -974,6 +974,13 @@ def _core_worktree(gitdir: Path, common: Path, has_common: bool) -> Path | None:
     The value is copied as is (xstrdup): no `~`, no variable — git dies on
     `chdir '~/t'` and so does a missing directory; refused here rather than
     checking a tree git never opens. Relative to the gitdir. [47] [84]"""
+    v = _core_worktree_value(gitdir, common, has_common)
+    return None if v is None else _resolve_existing(gitdir / v[0], v[1])
+
+
+def _core_worktree_value(gitdir: Path, common: Path, has_common: bool) -> tuple[str, Path] | None:
+    """The value _core_worktree resolves, as written, and the config file
+    it was read from; None when git applies none."""
     cfg = common / "config"
     wt = config_last(cfg, "core", "worktree")
     ext = config_last(cfg, "extensions", "worktreeconfig")
@@ -984,7 +991,17 @@ def _core_worktree(gitdir: Path, common: Path, has_common: bool) -> Path | None:
             wt, cfg = wt2, gitdir / "config.worktree"
     if not wt or has_common:
         return None
-    return _resolve_existing(gitdir / wt, cfg)
+    return wt, cfg
+
+
+def _as_written(path: Path | str) -> Path | None:
+    """`path`, normalised, when it is the real path of what it names — no
+    symlink on the way; None otherwise. For a path git wrote as a real one
+    (a worktree's `gitdir` pointer, a module's relative `core.worktree`
+    under a gitdir that is real): resolved, a directory the sandbox swapped
+    for a symlink named whatever the symlink leads to. [171]"""
+    p = os.path.normpath(path)
+    return Path(p) if os.path.realpath(p) == p else None
 
 
 def open_repo(root: Path) -> Repo:
@@ -4058,7 +4075,7 @@ def cmd_list() -> None:
 
 
 def forget_key(key: Path) -> None:
-    for suffix in ("", ".tmp", ".idx", ".idx.tmp", ".pending", ".pending.tmp", ".pending.lock"):
+    for suffix in ("", ".tmp", ".idx", ".idx.tmp", ".pending", ".pending.tmp", ".pending.lock", ".lock"):
         p = Path(str(key) + suffix)
         if p.exists():
             p.unlink()
@@ -4850,14 +4867,16 @@ def run_git(args: list[str], orig: Path, newrepo: NewRepo | None, git: str,
     import subprocess
     if newrepo is None:
         # Waited for, like a clone: what the command wrote is looked at once
-        # it is done (`git worktree add`, [155]). Its exit status is git's;
-        # a refusal there leaves the reference as it was.
+        # it is done (`git worktree add`, [155]) — whatever its status: git
+        # keeps the worktree whose post-checkout hook failed and returns the
+        # hook's status ([175]); one it undid left nothing to accept. Its
+        # exit status is git's; a refusal there leaves the reference as it
+        # was.
         rc = subprocess.call([git, *args])
-        if rc == 0:
-            try:
-                after()
-            except Refuse:
-                pass
+        try:
+            after()
+        except Refuse:
+            pass
         return rc
     d = newrepo.dir
     # A gitdir already there is reinitialised, its hooks and config kept:
@@ -5028,6 +5047,150 @@ WORKTREE_WRITES = {"add": ("added", True), "move": ("moved", True),
 _WORKTREE_POINTER = re.compile(r"^worktrees/([^/]+)/(?:commondir|gitdir)$")
 
 
+# Simultaneous `git worktree add` — a harness starting three tasks at once:
+# each one, its git done, saw the others' pointers beside its own, "more
+# than one worktree", and accepted nothing; the main tree was then asked
+# about all of them and every new tree was "never trusted". One at a time
+# per repository, from the check to the record: the second waits, finds the
+# first one's pointers in the reference, and "one command, one worktree"
+# stays true. The lock is a file of the state directory, never removed
+# while the repository is registered (unlinked under a holder, a lock file
+# lets a third process take a second one, [57]: `forget` alone removes it).
+# After WORKTREE_LOCK_WAIT seconds the command goes on without it: at worst
+# it is asked about, as before. [172]
+WORKTREE_LOCK_WAIT = 120
+_WORKTREE_LOCK: int | None = None        # the descriptor, held until this process exits
+
+
+def worktree_lock(key: Path) -> None:
+    import fcntl
+    global _WORKTREE_LOCK
+    STATE.mkdir(parents=True, exist_ok=True)
+    STATE.chmod(0o700)
+    fd = os.open(str(key) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + WORKTREE_LOCK_WAIT
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.02)
+    _WORKTREE_LOCK = fd
+
+
+# `git worktree add|move|remove|repair` write, or delete, where their path
+# arguments lead, and git follows a symlink there. The sandbox replaces a
+# directory by one — `.claude/worktrees`, where agents put theirs, or the
+# destination itself — and no hashed byte moves: `worktree add` checked the
+# branch out in a directory of the host (`~/.vim/pack/plugins/start/<name>/`),
+# the pointer to it was accepted with a line that did not say where ([155]),
+# and the tree out there took the repository's trust ([154]); `move` took
+# the worktree and its files there; `remove --force` on a worktree whose
+# directory was swapped deleted what the symlink leads to. [169] [170]
+#
+# Refused before git runs when a path argument goes through a symlink that
+# sits in the directory holding the main work tree, or below it: what
+# whoever wrote the volume can plant. A symlink elsewhere is the user's
+# (`~/w → /data/work`); one above that directory is not seen (a volume
+# mounted two levels up, a destination in a cousin directory: Known
+# limitations). The user's own symlink beside the repository is refused
+# too: the message names it and its target, the way out is the real path.
+#
+# The path arguments are found as git's option parser finds them
+# (parse-options): everything after `--`; before it, what is neither an
+# option nor the value of one. WORKTREE_ADD_VALUES: the options of `add`
+# whose value is the next argument — a closed list, held to git's own usage
+# (tests/test_claims.py); an unambiguous prefix of a long option is that
+# option, `-bname` and `--reason=why` carry their value. `add <path>
+# [<commit-ish>]`: the first one only, a branch named like a symlink of the
+# tree is not a path.
+WORKTREE_PATHS = ("add", "move", "remove", "repair")
+WORKTREE_ADD_VALUES = ("-b", "-B", "--reason")
+
+
+def worktree_path_args(rest: list[str]) -> list[str]:
+    """The path arguments of `git worktree <sub> …` for the subcommands of
+    WORKTREE_PATHS; [] for any other command."""
+    if rest[:1] != ["worktree"] or not rest[1:2] or rest[1] not in WORKTREE_PATHS:
+        return []
+    paths, args, i = [], rest[2:], 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            paths += args[i + 1:]
+            break
+        if a.startswith("-") and a != "-":
+            long = [o for o in WORKTREE_ADD_VALUES if o.startswith("--")]
+            takes = rest[1] == "add" and (a in WORKTREE_ADD_VALUES or (
+                a.startswith("--") and len(a) > 2 and "=" not in a and any(o.startswith(a) for o in long)))
+            i += 2 if takes else 1
+            continue
+        paths.append(a)
+        i += 1
+    return paths[:1] if rest[1] == "add" else paths
+
+
+def _planted_symlink(path: str, near: Path) -> tuple[Path, str] | None:
+    """The first symlink `path` goes through that sits in `near` or below
+    it, and its target; None when there is none. Walked as the kernel
+    walks it: a symlink elsewhere is followed, what comes after it is
+    looked at where it really is."""
+    cur = Path(os.path.abspath(os.sep))
+    for part in Path(path).parts[1:]:
+        nxt = cur / part
+        if nxt.is_symlink():
+            loc = Path(os.path.realpath(cur))
+            if loc == near or near in loc.parents:
+                return nxt, os.readlink(nxt)
+            cur = Path(os.path.realpath(nxt))
+        elif not os.path.lexists(nxt):
+            return None
+        else:
+            cur = nxt
+    return None
+
+
+def check_worktree_paths(repo: Repo, rest: list[str]) -> None:
+    """Refuse `git worktree add|move|remove|repair` whose path goes through
+    a symlink planted in or beside the repository (above). `repair` takes
+    its paths from the trusted pointers too and writes a gitfile in the
+    tree each one names: refused when that tree is reached through a
+    symlink — the pointer's bytes did not move, the directory under it
+    did, and a `.git` written in `~/Documents` made it a worktree of this
+    repository, trusted with it, that `worktree remove --force` deletes.
+    [169] [170]"""
+    paths = worktree_path_args(rest)
+    if rest[:1] != ["worktree"] or not rest[1:2] or rest[1] not in WORKTREE_PATHS:
+        return
+    main = repo.common.parent if repo.common.name == ".git" else repo.root
+    near = Path(os.path.realpath(main.parent))
+    for a in paths:
+        hit = _planted_symlink(os.path.normpath(os.path.join(os.getcwd(), a)), near)
+        if hit:
+            raise Refuse(f"git worktree {rest[1]}: {a} goes through a symlink, {hit[0]} → {hit[1]}: git would "
+                         f"work in the directory it leads to. If that is what you want, name that directory "
+                         f"itself.")
+    if rest[1] != "repair":
+        return
+    try:
+        adms = sorted((repo.common / "worktrees").iterdir())
+    except OSError:
+        return
+    for adm in adms:
+        try:
+            back = Path(_read_path_file(adm / "gitdir"))
+        except (Refuse, OSError):
+            continue
+        tree = os.path.normpath((back if back.is_absolute() else adm / back).parent)
+        if os.path.lexists(tree) and _as_written(tree) is None:
+            raise Refuse(f"git worktree repair: the directory of worktree {adm.name}, {tree}, is reached through "
+                         f"a symlink (it leads to {os.path.realpath(tree)}): git would write a .git there. "
+                         f"Remove the symlink — `git worktree prune` then drops the worktree — or put the "
+                         f"directory back.")
+
+
 def worktree_pointers(repo: Repo, sub: str, old: dict, new: dict) -> tuple[dict, list[str]] | None:
     """(`old` with the worktree pointers of `new`, the worktrees concerned)
     when those pointers changed as `git worktree <sub>` changes them, and
@@ -5035,16 +5198,27 @@ def worktree_pointers(repo: Repo, sub: str, old: dict, new: dict) -> tuple[dict,
     place, for auto_accept (`add -b x <path> origin/main` writes the
     branch's tracking) or for the next command.
 
-    - added, moved: `commondir` is `../..`, git's bytes, and `gitdir` an
-      absolute `<tree>/.git` whose gitfile names this `worktrees/<id>`
+    - added, moved: `commondir` is `../..`, git's bytes, and `gitdir` a
+      `<tree>/.git` — absolute, or relative to `worktrees/<id>` (`worktree
+      add --relative-paths`, git 2.48: never accepted while an absolute
+      path was asked, [174]) — whose gitfile names this `worktrees/<id>`
       back. What was hashed is what is read here (the sha). A pointer to a
       tree that does not point back is what `git worktree repair`
       "repairs": it rewrote the gitfile of another repository's worktree,
       outside the volume, to this gitdir.
-    - removed: the directory `worktrees/<id>` is gone, not one file of it.
+    - added, under `extensions.worktreeConfig` (what `git sparse-checkout
+      set` turns on): git copies the main `config.worktree` into
+      `worktrees/<id>/`. Taken with the pointers when it is, byte for
+      byte, the one the reference holds for the main tree. [173]
+    - removed: the directory `worktrees/<id>` is gone, and every entry the
+      reference held under it with it — the `config.worktree` and the
+      `modules/` of a worktree that had its own ([173]) — not one file of it.
     - the shape of WORKTREE_WRITES: `add` adds one worktree, `move`
       repoints one, `remove` removes one, `prune` removes some; a second
-      one that appeared meanwhile is nobody's command. [155]"""
+      one that appeared meanwhile is nobody's command — for a subcommand
+      that removes, an id whose pointers are there afterwards ("absent
+      before" was all that was asked of it: an addition, taken as a
+      removal, [176]). [155]"""
     kind, one = WORKTREE_WRITES[sub]
     ids = sorted({m.group(1) for _, (scope, path) in changes(old, new)
                   if scope == "local" and (m := _WORKTREE_POINTER.match(path))})
@@ -5062,8 +5236,10 @@ def worktree_pointers(repo: Repo, sub: str, old: dict, new: dict) -> tuple[dict,
         if not any(now):
             if kind != "removed" or os.path.lexists(adm):
                 return None
+            for k in [k for k in out if k[0] == "local" and k[1].startswith(f"worktrees/{name}/")]:
+                del out[k]
             continue
-        if not all(now) or was != [kind == "moved"] * 2:
+        if kind == "removed" or not all(now) or was != [kind == "moved"] * 2:
             return None
         c, g = new[keys[0]], new[keys[1]]
         if kind == "moved" and c != old[keys[0]]:
@@ -5071,13 +5247,19 @@ def worktree_pointers(repo: Repo, sub: str, old: dict, new: dict) -> tuple[dict,
         try:
             raw = read_file(adm / "gitdir")
             back = Path(raw.rstrip(b"\r\n").decode(errors="surrogateescape"))
+            if not back.is_absolute():
+                back = Path(os.path.normpath(adm / back))
             if (c.kind, c.sha) != ("f", hashlib.sha256(b"../..\n").hexdigest()) \
                     or (g.kind, g.sha) != ("f", hashlib.sha256(raw).hexdigest()) \
-                    or b"\0" in raw or not back.is_absolute() or back.name != ".git" \
+                    or b"\0" in raw or back.name != ".git" \
                     or read_gitfile(back) != adm.resolve():
                 return None
         except (Refuse, OSError):
             return None
+        cw, main_cw = ("local", f"worktrees/{name}/config.worktree"), old.get(("local", "config.worktree"))
+        if kind == "added" and cw in new and cw not in old and main_cw is not None \
+                and main_cw.kind == "f" and (new[cw].kind, new[cw].sha) == ("f", main_cw.sha):
+            out[cw] = new[cw]
     return out, ids
 
 
@@ -5224,9 +5406,12 @@ def trust_holder(insp: Inspection) -> Path | None:
       there would: a file this tree's config named and that went missing
       is a difference there, and is none here (one entry less);
     - the gitdir names this tree back — a worktree's `gitdir` file, a
-      submodule's `core.worktree`, both in the holder's reference. A copy
-      of the gitfile planted elsewhere (`src/.git`) reaches the same
-      gitdir: git run there would work on another HEAD and index, unseen;
+      submodule's `core.worktree`, both in the holder's reference — by
+      its real path (_as_written). A copy of the gitfile planted elsewhere
+      (`src/.git`) reaches the same gitdir: git run there would work on
+      another HEAD and index, unseen; and resolved, the path named is that
+      copy's directory once the tree itself is swapped for a symlink to
+      it ([171]);
     - every file this tree's check watches is in the holder's reference,
       same bytes, same mode — or, for what the config names in a linked
       worktree's tree (a relative hooksPath resolves there, [120]), the
@@ -5254,9 +5439,10 @@ def trust_holder(insp: Inspection) -> Path | None:
         if repo.gitdir != repo.common:
             back = Path(_read_path_file(repo.gitdir / "gitdir"))
             back = back if back.is_absolute() else repo.gitdir / back
-            named = back.parent.resolve() if back.name == ".git" else None
+            named = _as_written(back.parent) if back.name == ".git" else None
         else:
-            named = _core_worktree(repo.gitdir, repo.common, False)
+            v = _core_worktree_value(repo.gitdir, repo.common, False)
+            named = _as_written(repo.gitdir / v[0]) if v else None
     except (Refuse, OSError):            # a holder git refuses, no `gitdir` file
         return None
     if named != repo.label:
@@ -5901,6 +6087,10 @@ def main(argv: list[str]) -> int:
         label, key, named = repo.label, repo.key, repo.named
         if mode == "exec":
             _COMMAND = split_global_options(argv, orig).rest       # [147]
+            check_worktree_paths(repo, _COMMAND)                   # [169]
+            if (judged is None and repo.gitdir == repo.common and _COMMAND[:1] == ["worktree"]
+                    and _COMMAND[1:2] and _COMMAND[1] in WORKTREE_WRITES):
+                worktree_lock(key)                                 # [172]
         if judged is not None:
             rest = split_global_options(argv, orig).rest
             covered = judged.covers(repo)

@@ -267,8 +267,12 @@ files: nothing to do. `submodule add` and `submodule update --init` write
 to the gitdir: the next command in the superproject asks once (typed in
 the new submodule first, it is refused and names the superproject). `git
 worktree add`, `move`, `remove` and `prune` run through gitwary ask
-nothing, in the main tree or in the other worktrees (a worktree created by
-another git, an IDE's bundled one, is asked about once). A submodule or a
+nothing, in the main tree or in the other worktrees, started one by one or
+several at once (a worktree created by another git, an IDE's bundled one,
+is asked about once). One thing is refused there: a path that goes through
+a symlink sitting in the repository or beside it (`.claude/worktrees →
+…`) — git would check the branch out, or delete, wherever it leads; name
+the real directory instead. A submodule or a
 linked worktree needs no trust of its own: the first git run there takes
 the trust of the repository that holds it, and says so (`trusted with …`),
 and again whenever that repository's reference has moved. A branch created

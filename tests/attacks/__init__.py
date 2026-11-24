@@ -1397,6 +1397,103 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      whole. Not yet shown: the one line of a worktree pointer, the config
      of a repository outside the gitdir (a local remote, a borrowed
      repository: hashed, never copied).
+[169] A write outside the volume, accepted without a word: the
+     destination of `git worktree add` or `move` going through a symlink
+     the sandbox planted — `.claude/worktrees`, where agents put theirs, a
+     directory beside the repository, or the destination itself. No hashed
+     byte moves; git follows the symlink and checks the branch out (the
+     sandbox's commit) in a directory of the host, `~/.vim/pack/plugins/
+     start/<name>/`; gitwary, which ran the command, said `worktree task
+     (added) → reference updated` — the id, never the path ([155]) — and
+     the tree out there took the repository's trust at its first git
+     ([154]). git's own behaviour; gitwary's share was the acceptance.
+     Found by the fifth agentic audit, 2026-11-23. Fix: refused before git
+     runs when a path argument of `worktree add|move|remove|repair` goes
+     through a symlink sitting in the directory that holds the main work
+     tree, or below (check_worktree_paths); the paths found as git's
+     option parser finds them, the options of `add` that take a value
+     held to git's usage (tests/test_claims.py). Refused too: the user's
+     own symlink beside the repository — the message names it and its
+     target, the real path is the way out. Not seen: a symlink above that
+     directory (DESIGN.md, Known limitations).
+[170] A write, then a deletion, outside the volume: the directory of a
+     worktree gitwary had accepted, swapped for a symlink to a directory
+     of the host with no `.git` in it (`~/Documents`). `git worktree
+     repair`, the answer to the "prunable" the swap causes, wrote a
+     gitfile there and repointed the worktree to it, with no line from
+     gitwary; the question at the next command showed `modified
+     worktrees/wt/gitdir`, not where it now led; answered, `~/Documents`
+     was a worktree "trusted with" the repository, and `git worktree
+     remove --force` — a harness cleaning up — deleted it, `(removed) →
+     reference updated`. On git before 2.48 the repair leaves the pointer
+     as it was: no question at all. Found by the fifth agentic audit,
+     2026-11-23. Fix: [169]'s refusal for the path given to `remove` and
+     `move`, and `repair` refused when the tree a trusted pointer names
+     is reached through a symlink.
+[171] Trust taken by a directory nobody created: a trusted submodule's
+     or linked worktree's directory replaced by a symlink to a directory
+     the sandbox planted, the gitfile copied there. "The gitdir names the
+     tree back" was compared after resolving symlinks: the path the
+     trusted pointer names resolved to the planted directory, which was
+     "trusted with" the holder, with one green line. Nothing ran — every
+     file git would run from there is asked of the holder's reference —
+     but git typed in `sup/src` worked on the submodule's repository
+     (`add -A`, `commit`, `push`: the superproject's files on the
+     submodule's remote), in `repo/src` on the worktree's HEAD and index:
+     the case [154] names as the one to refuse, a gitfile planted
+     elsewhere, made to pass by a second write. Found by the fifth
+     agentic audit, 2026-11-23 (two reviewers). Fix: the pointer names a
+     tree by its real path (_as_written): git writes a worktree's
+     `gitdir` resolved, a module's `core.worktree` relative to a gitdir
+     that is real; a symlink on the way is somebody else's.
+[172] False positive, recurring: several `git worktree add` started at
+     once — a harness starting its tasks — accepted nothing: each, its
+     git done, found the others' pointers beside its own, more than the
+     one worktree an `add` writes ([155]); the main tree was then asked
+     about all of them, every new tree was "never trusted". Found by the
+     fifth agentic audit, 2026-11-23. Fix: a lock per repository, in the
+     state directory, from the check to the record, for the four
+     subcommands of WORKTREE_WRITES (worktree_lock): the second command
+     waits and finds the first one's pointers in the reference. Left out:
+     accepting several worktrees per command — "a second one that
+     appeared meanwhile is nobody's command" is what keeps a worktree
+     planted during the command out.
+[173] False positive, recurring: more than two files under
+     `worktrees/<id>/`. With `extensions.worktreeConfig` — what `git
+     sparse-checkout set` turns on — `worktree add` copies the main
+     `config.worktree` into the new worktree: a third file, nothing
+     accepted, the new tree "never trusted". And `worktree remove` of a
+     worktree with a `config.worktree` of its own or initialised
+     submodules deletes them with the directory: each asked about. Found
+     by the fifth agentic audit, 2026-11-23. Fix: the copied file is
+     taken with the pointers when it is, byte for byte, the main one the
+     reference holds; a removed worktree takes every entry under its
+     `worktrees/<id>/` with it.
+[174] False positive, recurring: relative worktree paths (`worktree add
+     --relative-paths`, `worktree.useRelativePaths`, git 2.48; made for a
+     repository seen under two paths, a directory mounted in a
+     container). `gitdir` is then relative to `worktrees/<id>`, and an
+     absolute path was asked of it: `add` and `move` never accepted, the
+     tree "never trusted". Found by the fifth agentic audit, 2026-11-23.
+     Fix: relative or absolute, the pointer leads to a `.git` whose
+     gitfile names the same `worktrees/<id>` back. The first use also
+     writes `extensions.relativeWorktrees` in the config: asked once,
+     with its diff.
+[175] False positive: `git worktree add` whose post-checkout hook exits
+     non-zero in the fresh tree (no `node_modules` yet, git-lfs not on the
+     PATH) keeps the worktree and returns the hook's status; what the
+     command wrote was looked at only when git returned 0. Found by the
+     fifth agentic audit, 2026-11-23. Fix: looked at whatever the status;
+     the pointer test decides, and a worktree git undid left nothing.
+[176] Wrong condition: for a subcommand that removes (`prune`), an id
+     whose pointers exist afterwards only had to be absent before — an
+     addition. A worktree planted while `git worktree prune` ran was
+     accepted and announced `(removed)`, and its tree, a directory of the
+     main tree, took the repository's trust. Needs a writer during the
+     command, which the threat model excludes ([44]); the condition
+     contradicted the function's own contract. Found by the fifth
+     agentic audit, 2026-11-23. Fix: for a removal, an id present
+     afterwards is a refusal.
 """
 from __future__ import annotations
 

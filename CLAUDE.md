@@ -28,9 +28,12 @@ paid for by a bypass.
   reader executes from a repository nobody judged, [126]; the proof is the
   in-process table), `NEVER_RESUMES`/`SEQUENCE_ENDS` (commands that never
   run a todo line, [147]), the two ways out let through a structural
-  refusal (`_repairs_split_index` [148], `_absorbs_nested` [149]) and
+  refusal (`_repairs_split_index` [148], `_absorbs_nested` [149]),
   `WORKTREE_WRITES` (the `git worktree` subcommands whose own two
-  pointers are accepted after gitwary ran them, [155]). The exclusion lists
+  pointers are accepted after gitwary ran them, [155]) and
+  `WORKTREE_PATHS`/`WORKTREE_ADD_VALUES` (the subcommands whose path
+  arguments are refused through a planted symlink, the options of `add`
+  that take a value, [169]). The exclusion lists
   (`DATA_KEYS`, `VALUE_KEYS`) are mechanical where they can be:
   `VALUE_KEYS` is the `[bool]`/`[int]` sections of the inventory, taken
   from git's source, never curated ([129]); a string key stays under the
@@ -80,8 +83,9 @@ paid for by a bypass.
   linked worktree), or whose own reference no longer matches ([165]),
   takes the trust of the repository holding its gitdir on the same terms,
   held to that repository's reference: in its trusted state, the gitdir
-  naming the tree back, every watched file in the reference
-  (`trust_holder`, [154]); its own reference is the cache of that answer.
+  naming the tree back by its real path ([171]), every watched file in
+  the reference (`trust_holder`, [154]); its own reference is the cache
+  of that answer.
 - **A child never refuses what its own command just wrote**: those
   writes are judged at the next command ([124]: a re-check lost
   autostashed work).
@@ -135,7 +139,7 @@ are honoured as git honours them.
 | output, colours, `san` | `san`, `Style`, `set_output` | Display and sanitization |
 | state files, keys, locking; a gitdir named apart from its tree (GIT_DIR: vcsh, dotfiles) is half of the key and of the records ([157]) | `save_trust`, `load_manifest`, `update_pending`, `state_key`, `gitdir_apart`, `Repo.key`/`title`/`dotgit`, `open_record`, `records_at` | Storage; What the script checks, 1 |
 | a submodule, a linked worktree trusted with the repository holding its gitdir, again when its reference no longer matches; what its refusal says of that repository | `trust_holder`, `_holder`, `holder_unsettled`, `REPO_ENV` | Trusted with the repository that holds the gitdir |
-| the pointers of a `git worktree` command gitwary ran | `WORKTREE_WRITES`, `worktree_pointers`, `accept_worktree_pointers`, `run_git` | Exec-mode shortcuts |
+| the pointers of a `git worktree` command gitwary ran, one command at a time; its path arguments refused through a planted symlink | `WORKTREE_WRITES`, `worktree_pointers`, `accept_worktree_pointers`, `worktree_lock`, `WORKTREE_PATHS`, `worktree_path_args`, `check_worktree_paths`, `run_git` | Exec-mode shortcuts |
 | exec mode: options, clone/init, prompt, pending | `split_global_options`, `parse_new_repo`, `check_or_die`, `ask_on_tty`, `wait_for_decision` | Auto-trust; Exec-mode shortcuts |
 | passthroughs that read no repository | `TRANSPORT`, `main` | Which git runs |
 | child gits: the marker (pid + start + judged gitdir/common/root/label), coverage by `gitdir_roots` and `tree_named`, `new`, the served repository, no detach, the exec-path wrap, its check and its macOS shim | `Judged`, `_ancestors`, `_proc_lineage`, `read_judged`, `set_judged`, `NewRepo`, `_served_repository`, `keep_attached`, `check_wrap`, `cmd_exec_path`, `PATH_QUERIES`, `run_git` | Nested repositories; DESIGN-exec-path.md |
@@ -145,7 +149,7 @@ are honoured as git honours them.
 
 ## Tests
 
-`python3 -m pytest` (~1810 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], the accepted limitations; ~410 s), before
+`python3 -m pytest` (~1830 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], the accepted limitations; ~410 s), before
 any change. pytest is not on the system python: `python3 -m venv <scratch>/venv
 && venv/bin/pip install pytest`.
 

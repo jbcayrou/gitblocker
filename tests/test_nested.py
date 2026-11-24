@@ -247,7 +247,7 @@ def test_worktree_add_accepts_one_worktree(gw: GW, repo: Path, tmp_path: Path) -
 @pytest.mark.parametrize("pointer, content", [
     ("gitdir", "{repo}/src/.git"),             # a tree whose gitfile does not point back
     ("gitdir", "{repo}/src"),                  # not a `.git`
-    ("gitdir", "../../../../wt/.git"),         # relative: not what git writes without the extension
+    ("gitdir", "../../../src/.git"),           # relative, to a tree that does not point back ([174])
     ("commondir", "../../"),                   # git reads the same directory; not git's bytes
     ("commondir", "{repo}/.git"),
 ])
@@ -565,3 +565,114 @@ def test_a_config_added_under_a_nested_root_is_shown_whole(gw: GW, repo: Path, t
     gw.git("config", "-f", str(repo / ".git/modules/sub/config"), "core.pager", "sh evil.sh")
     r = gw.check(repo)
     assert r.blocked and "modules/sub/config" in r.err and "pager = sh evil.sh" in r.err, r.text
+
+
+# ----------------- [169] [170] a `git worktree` path that goes through a symlink
+# The sandbox replaces a directory by a symlink: no hashed byte moves. git
+# follows it, and writes — or deletes — where it leads. Refused before git
+# runs when the symlink sits in the repository's tree or beside it.
+def _outside(tmp_path: Path) -> Path:
+    out = tmp_path / "elsewhere" / "plugins"       # not beside the repository: a directory of the host
+    out.mkdir(parents=True)
+    return out
+
+
+@pytest.mark.parametrize("where", ["inside", "beside", "leaf"])
+def test_worktree_add_through_a_planted_symlink_does_not_run(gw: GW, repo: Path, tmp_path: Path,
+                                                             where: str) -> None:
+    """[169] `.claude/worktrees` (where agents put theirs), a directory
+    beside the repository, or the destination itself, replaced by a
+    symlink to a directory outside the volume: `git worktree add` checked
+    the branch out there, gitwary said `worktree task (added) → reference
+    updated` without the path, and the tree out there took the
+    repository's trust."""
+    import os
+    out = _outside(tmp_path)
+    if where == "inside":
+        (repo / ".claude").mkdir()
+        os.symlink(out, repo / ".claude/worktrees")
+        dest, landed = ".claude/worktrees/task", out / "task"
+    elif where == "beside":
+        os.symlink(out, tmp_path / "wts")
+        dest, landed = "../wts/task", out / "task"
+    else:
+        os.symlink(out, tmp_path / "wt")
+        dest, landed = "../wt", out / ".git"
+    assert not gw.check(repo).blocked                       # nothing the fingerprint watches moved
+    for argv in (["add", "-q", "-b", "task", dest], ["add", "-q", "--lock", "--reas", "x", dest],
+                 ["add", "-q", "--", dest]):
+        r = gw.run("git", "worktree", *argv, cwd=repo)
+        assert r.blocked and "symlink" in r.err and "reference updated" not in r.err, r.text
+        assert not landed.exists() and not (repo / ".git/worktrees").exists(), r.text
+    r = gw.git("worktree", "add", "-q", "-b", "task", dest, cwd=repo)      # the control: git alone goes there
+    assert r.rc == 0 and landed.exists(), r.text
+
+
+def test_worktree_move_and_remove_through_a_symlink_do_not_run(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[169] [170] `move` to a destination that is a symlink; `remove` of a
+    worktree whose directory was swapped for one — `remove --force`
+    deletes what the path leads to."""
+    import os
+    out = _outside(tmp_path)
+    (out / "thesis.txt").write_text("years of work\n")
+    wt = tmp_path / "wt"
+    assert gw.run("git", "worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    os.symlink(out, tmp_path / "archive")
+    r = gw.run("git", "worktree", "move", str(wt), "../archive/wt", cwd=repo)
+    assert r.blocked and "symlink" in r.err and wt.is_dir() and not (out / "wt").exists(), r.text
+    shutil.rmtree(wt)
+    os.symlink(out, wt)
+    for argv in (["remove", "--force", str(wt)], ["remove", "--force", "../wt"]):
+        r = gw.run("git", "worktree", *argv, cwd=repo)
+        assert r.blocked and "symlink" in r.err and (out / "thesis.txt").exists(), r.text
+
+
+def test_worktree_repair_through_a_swapped_tree_does_not_run(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[170] the directory of a worktree gitwary accepted, swapped for a
+    symlink to a directory of the host that holds no `.git`: `git worktree
+    repair` — the answer to the "prunable" the swap causes — wrote one
+    there, unasked, and repointed the worktree to it; the tree out there
+    then took the repository's trust, and a `worktree remove --force`
+    deleted it. The pointer's bytes never moved before the repair."""
+    import os
+    out = _outside(tmp_path)
+    wt = tmp_path / "wt"
+    assert gw.run("git", "worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    shutil.rmtree(wt)
+    os.symlink(out, wt)
+    assert not gw.check(repo).blocked
+    r = gw.run("git", "worktree", "repair", cwd=repo)
+    assert r.blocked and "symlink" in r.err and not (out / ".git").exists(), r.text
+    assert gw.git("worktree", "repair", cwd=repo).rc == 0 and (out / ".git").exists(), \
+        "git no longer writes a gitfile through a swapped tree: [170] may be moot"
+
+
+# ------------------------------- [176] `worktree prune` and a worktree that appeared
+def test_worktree_prune_does_not_accept_a_worktree_that_appeared(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """A worktree planted while `git worktree prune` ran, pointers and
+    gitfile consistent: for a subcommand that removes, "absent before" was
+    the condition asked of an id present afterwards — an addition, taken
+    and announced `(removed)`. The writer is a git that plants, then
+    runs git: nothing writes during a command in the threat model, the
+    condition was wrong all the same."""
+    import shlex
+    from tests.conftest import REAL_GIT
+    adm, src = repo / ".git/worktrees/evil", repo / "src"
+    planting = tmp_path / "git-that-plants"
+    write_exec(planting, f"""#!/bin/sh
+case " $* " in *" prune "*)
+    mkdir -p '{adm}' '{src}' && echo 'ref: refs/heads/main' > '{adm}/HEAD' && echo ../.. > '{adm}/commondir' \\
+        && echo '{src}/.git' > '{adm}/gitdir' && echo 'gitdir: {adm}' > '{src}/.git';;
+esac
+exec {shlex.quote(REAL_GIT)} "$@"
+""")
+    wt = tmp_path / "wt"
+    assert gw.run("git", "worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    shutil.rmtree(wt)                                       # something for prune to remove
+    other = GW({**gw.env, "GITWARY_REAL_GIT": str(planting)}, gw.state, gw.raw_exec)
+    r = other.run("git", "worktree", "prune", cwd=repo)
+    assert r.rc == 0 and adm.is_dir(), f"the worktree was not planted, the test proves nothing\n{r.text}"
+    assert "reference updated" not in r.err, r.text
+    r = gw.check(repo)
+    assert r.blocked and "worktrees/evil/gitdir" in r.err, r.text
+    assert gw.run("git", "status", "--short", cwd=src).blocked

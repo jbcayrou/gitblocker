@@ -1725,6 +1725,121 @@ def test_branch_tracking_in_both_configs_is_one_acceptance(gw: GW, repo: Path, t
     assert not gw.check(repo).blocked
 
 
+# ------------ [172]–[175] what a `git worktree` command writes, all of it (2026-11-24)
+def test_simultaneous_worktree_adds_are_each_accepted(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[172] a harness that starts three tasks runs three `git worktree
+    add` at once. Each looked at what had moved once its git was done, saw
+    the others' pointers beside its own — more than one worktree — and
+    accepted nothing: the main tree asked about six pointers and every
+    new tree was "never trusted". One at a time, from the check to the
+    record, and "one command, one worktree" stays true."""
+    import subprocess
+    from tests.conftest import GITWARY
+    procs = [subprocess.Popen([sys.executable, str(GITWARY), "git", "worktree", "add", "-q", "-b", f"t{i}",
+                               str(tmp_path / f"w{i}")], cwd=repo, env=gw.env, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in range(3)]
+    for p in procs:
+        _, err = p.communicate(timeout=120)
+        assert p.returncode == 0 and "reference updated" in err, err
+    assert not gw.check(repo).blocked
+    for i in range(3):
+        r = gw.run("git", "status", "--short", cwd=tmp_path / f"w{i}")
+        assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+
+
+def test_worktree_add_under_a_worktree_config_is_accepted(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[173] `git sparse-checkout set` turns `extensions.worktreeConfig` on
+    and writes `config.worktree`; `worktree add` then copies that file
+    into the new worktree's `worktrees/<id>/` — a third file beside the
+    two pointers, the bytes the reference holds for the main tree."""
+    assert gw.git("sparse-checkout", "set", "--no-cone", "/*", cwd=repo).rc == 0
+    assert (repo / ".git/config.worktree").is_file()
+    gw.trust(repo)
+    wt = tmp_path / "wt"
+    _silent(gw, repo, "worktree", "add", "-q", str(wt))
+    assert (repo / ".git/worktrees/wt/config.worktree").read_bytes() == (repo / ".git/config.worktree").read_bytes()
+    r = gw.run("git", "status", "--short", cwd=wt)
+    assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+    _silent(gw, repo, "worktree", "remove", str(wt))
+
+
+def test_worktree_with_a_config_and_submodules_of_its_own_is_removed_whole(gw: GW, repo: Path,
+                                                                         tmp_path: Path) -> None:
+    """[173] a worktree that got a `config.worktree` of its own and
+    initialised its submodules holds more than two files under
+    `worktrees/<id>/`; `worktree remove` deletes the directory, and each
+    of them was asked about."""
+    add_submodule(gw, repo, tmp_path)
+    gw.git("config", "extensions.worktreeConfig", "true", cwd=repo)
+    gw.trust(repo)
+    wt = tmp_path / "wt"
+    _silent(gw, repo, "worktree", "add", "-q", str(wt))
+    assert gw.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", cwd=wt).rc == 0
+    assert gw.git("config", "--worktree", "core.abbrev", "12", cwd=wt).rc == 0
+    gw.trust(repo)                                   # the user's own changes, reviewed
+    assert (repo / ".git/worktrees/wt/modules/sub/config").is_file()
+    r = gw.run("git", "worktree", "remove", "--force", str(wt), cwd=repo)
+    assert r.rc == 0 and "reference updated" in r.err, r.text
+    assert not gw.check(repo).blocked
+
+
+@pytest.mark.skipif(not git_has("relative_worktrees"), reason="worktree add --relative-paths: git 2.48")
+def test_relative_worktree_paths_are_accepted(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[174] `worktree add --relative-paths` (or `worktree.useRelativePaths`,
+    made for a repository seen under two paths: a directory mounted in a
+    container) writes `gitdir` relative to `worktrees/<id>`. Never an
+    absolute path: never accepted. The first one also sets
+    `extensions.relativeWorktrees` in the config: asked once."""
+    a, b, c = (tmp_path / n for n in "abc")
+    r = gw.run("git", "worktree", "add", "-q", "--relative-paths", str(a), cwd=repo)
+    assert r.rc == 0, r.text
+    assert not (repo / ".git/worktrees/a/gitdir").read_text().startswith("/")
+    r = gw.check(repo)
+    assert r.blocked and "relativeworktrees" in r.err.lower(), r.text      # the config, shown
+    gw.trust(repo)
+    _silent(gw, repo, "worktree", "add", "-q", "--relative-paths", str(b))
+    _silent(gw, repo, "worktree", "move", "--relative-paths", str(b), str(c))
+    for wt in (a, c):
+        r = gw.run("git", "status", "--short", cwd=wt)
+        assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+    _silent(gw, repo, "worktree", "remove", str(c))
+
+
+def test_worktree_add_whose_post_checkout_hook_fails_is_accepted(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[175] a trusted post-checkout hook that fails in the fresh tree (no
+    `node_modules` yet, git-lfs not on the PATH): git keeps the worktree
+    and returns the hook's status. What moved was looked at only when git
+    returned 0."""
+    write_exec(repo / ".git/hooks/post-checkout", "#!/bin/sh\nexit 3\n")
+    gw.trust(repo)
+    wt = tmp_path / "wt"
+    r = gw.run("git", "worktree", "add", "-q", str(wt), cwd=repo)
+    assert r.rc != 0 and (wt / ".git").is_file(), r.text
+    assert "reference updated" in r.err, r.text
+    assert not gw.check(repo).blocked
+    r = gw.run("git", "status", "--short", cwd=wt)
+    assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+
+
+def test_worktree_paths_that_cross_no_planted_symlink_run(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[169] what the refusal of a path through a symlink leaves alone: a
+    symlink of the user's own that is not beside the repository (`~/w →`
+    the directory holding it), a branch or a commit-ish named like a
+    symlink of the tree, the value of `--reason`."""
+    import os
+    elsewhere = tmp_path.parent / f"{tmp_path.name}-elsewhere"      # not beside the repository
+    elsewhere.mkdir()
+    os.symlink(tmp_path, elsewhere / "w")
+    _silent(gw, repo, "worktree", "add", "-q", str(elsewhere / "w/one"))
+    os.symlink("f", repo / "docs")
+    assert gw.git("add", "docs", cwd=repo).rc == 0 and gw.git("commit", "-qm", "link", cwd=repo).rc == 0
+    assert gw.git("branch", "docs2", cwd=repo).rc == 0
+    os.symlink("f", repo / "docs2")
+    _silent(gw, repo, "worktree", "add", "-q", "-b", "docs", str(tmp_path / "two"))
+    _silent(gw, repo, "worktree", "add", "-q", str(tmp_path / "three"), "docs2")
+    _silent(gw, repo, "worktree", "add", "-q", "--lock", "--reason", "docs", str(tmp_path / "four"))
+
+
 # ------------------- a repository git borrows objects from ([156], 2026-11-13)
 def _objects(repo: Path) -> int:
     """Object files the repository holds itself: loose objects and packs."""

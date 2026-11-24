@@ -97,7 +97,8 @@ def git_has(feature: str) -> bool:
     `detach`: `maintenance run --detach` and `gc --detach` (git 2.47).
     `reftable`: `init --ref-format=reftable` (git 2.45).
     `blanks_kept`: a tab between two words of an unquoted config value is
-    read as a tab (git 2.45+), not as a space."""
+    read as a tab (git 2.45+), not as a space.
+    `relative_worktrees`: `worktree add --relative-paths` (git 2.48)."""
     if feature not in _FEATURES:
         import os
         import tempfile
@@ -124,6 +125,10 @@ def git_has(feature: str) -> bool:
                 ok = run("config", "-f", "cfg", "a.b").stdout == "x\ty\n"
             elif feature == "reftable":
                 ok = run("init", "-q", "--ref-format=reftable", "rt").returncode == 0
+            elif feature == "relative_worktrees":
+                run("init", "-q", ".")
+                r = run("worktree", "add", "-h")
+                ok = "relative-paths" in r.stdout + r.stderr
             else:
                 raise ValueError(feature)
         _FEATURES[feature] = ok

@@ -56,6 +56,8 @@ NO_INHERIT = {
     "attack_gitfile_copy_of_a_trusted_submodule": "src",
     "attack_gitfile_copy_of_a_trusted_worktree": "src",
     "attack_worktree_gitdir_planted_in_a_volatile_zone": "src",
+    "attack_submodule_tree_swapped_for_a_symlink": "src",
+    "attack_worktree_tree_swapped_for_a_symlink": "src",
 }
 
 

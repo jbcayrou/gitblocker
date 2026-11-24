@@ -1000,6 +1000,34 @@ def test_worktree_command_writes_its_pointers_and_nothing_else(gw: GW, repo: Pat
         assert not (repo / ".git/worktrees/wt").exists()
 
 
+def test_worktree_add_options_that_take_a_value_are_git_s(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[169] check_worktree_paths finds the path of `git worktree add` as
+    git's option parser does: the first argument that is neither an option
+    nor the value of one. WORKTREE_ADD_VALUES, the options whose value is
+    the next argument, is the set git's own usage gives a `<value>`; an
+    unambiguous prefix of a long one is that option."""
+    usage = gw.git("worktree", "add", "-h", cwd=repo).text
+    takes = set()
+    for line in usage.splitlines():
+        m = re.match(r"^    (-[^ ,]+(?:, -[^ ,]+)*)( <[^>]+>)?(?:\s{2,}.*)?$", line)
+        if m and m.group(2):
+            takes |= {n.replace("[no-]", "") for n in m.group(1).split(", ")}
+    assert takes, usage
+    assert takes == set(gw_mod.WORKTREE_ADD_VALUES), (sorted(takes), usage)
+    out = tmp_path / "out"
+    for i, argv in enumerate((["-b", "b1"], ["-B", "b2"], ["--lock", "--reason", "why"], ["--lock", "--reas", "why"])):
+        dest = out / f"w{i}"
+        r = gw.git("worktree", "add", "-q", *argv, str(dest), cwd=repo)
+        assert r.rc == 0 and (dest / ".git").is_file(), (argv, r.text)
+        assert gw_mod.worktree_path_args(["worktree", "add", "-q", *argv, str(dest)]) == [str(dest)], argv
+    assert gw_mod.worktree_path_args(["worktree", "add", "-q", "-bx", "--reason=why", "p", "main"]) == ["p"]
+    assert gw_mod.worktree_path_args(["worktree", "add", "--", "-p", "main"]) == ["-p"]
+    assert gw_mod.worktree_path_args(["worktree", "move", "a", "b"]) == ["a", "b"]
+    assert gw_mod.worktree_path_args(["worktree", "remove", "--force", "a"]) == ["a"]
+    assert gw_mod.worktree_path_args(["worktree", "repair", "a", "b"]) == ["a", "b"]
+    assert gw_mod.worktree_path_args(["worktree", "list"]) == []
+
+
 def test_worktree_subcommand_is_spelt_in_full(gw: GW, repo: Path, tmp_path: Path) -> None:
     """WORKTREE_WRITES is matched on the whole word: git takes no prefix of
     a `worktree` subcommand, and none comes after an option."""

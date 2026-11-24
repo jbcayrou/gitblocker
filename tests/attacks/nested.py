@@ -352,3 +352,34 @@ def attack_alias_in_a_submodule_config_beside_tracking_in_the_superproject(gw: G
     with open(repo / ".git/modules/sub/config", "a") as f:
         f.write("[alias]\n\tst = !sh evil.sh\n")
     assert gw.git("checkout", "-q", "-b", "one", "origin/main", cwd=repo).rc == 0
+
+
+def attack_submodule_tree_swapped_for_a_symlink(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[171] a trusted submodule's directory replaced by a symlink to a
+    directory the sandbox planted, its gitfile copied there: resolved,
+    the path `core.worktree` names is the planted one — which took the
+    superproject's trust, and whose commits and pushes went to the
+    submodule's repository"""
+    import os
+    import shutil
+    sub = add_submodule(gw, repo, tmp_path)
+    gw.trust(repo)
+    (repo / "src").mkdir()
+    shutil.copy(sub / ".git", repo / "src/.git")
+    shutil.rmtree(sub)
+    os.symlink("src", sub)
+
+
+def attack_worktree_tree_swapped_for_a_symlink(gw: GW, repo: Path, tmp_path: Path) -> None:
+    """[171] a trusted linked worktree's directory replaced by a symlink
+    to a directory of the main tree, its gitfile copied there: git run
+    from that directory works on the worktree's HEAD and index"""
+    import os
+    import shutil
+    wt = tmp_path / "wt"
+    assert gw.run("git", "worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    assert gw.run("git", "status", "--short", cwd=wt).rc == 0      # the real one took the trust
+    (repo / "src").mkdir()
+    shutil.copy(wt / ".git", repo / "src/.git")
+    shutil.rmtree(wt)
+    os.symlink(repo / "src", wt)
