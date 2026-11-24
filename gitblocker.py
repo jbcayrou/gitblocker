@@ -1556,18 +1556,41 @@ def nested_repo_hint(n: Path) -> str:
             f"(a plain `git add -A` creates one), git will execute its config. If it is "
             f"your own vendored repository: inspect {n}/config and {n}/hooks, declare it "
             f"in .gitmodules, run `git submodule absorbgitdirs -- {d}` (gitblocker lets it "
-            f"through, with core.fsmonitor pinned off: the raw git runs the nested "
-            f"repository's fsmonitor), then `gitblocker trust`. Otherwise delete {d}/.git "
-            f"first, then `git rm --cached {d}`.")
+            f"through, with core.fsmonitor pinned off and no pager: the raw git runs the "
+            f"nested repository's fsmonitor, and its pager), then `gitblocker trust`, which "
+            f"shows the config of what was absorbed — of any repository nested in it too. "
+            f"Otherwise delete {d}/.git first, then `git rm --cached {d}`.")
+
+
+# The environment of a `git submodule absorbgitdirs` gitblocker lets through
+# (_absorbs_nested). That command moves the nested gitdir under
+# `.git/modules/`, then starts a git in it to absorb what is nested there,
+# and so on down: gits the marker covers — their gitdir is under `modules/`
+# by then — reading configs nobody has seen yet, the next command being the
+# one that shows them. On a terminal such a git pages with the
+# `pager.submodule--helper` of that config: of the vendored repository, or
+# of one planted inside it (`vendor/deep`) while the refusal said to
+# inspect `vendor/.git/config`. `GIT_PAGER=cat`: git's own "no pager", ahead
+# of `core.pager` and `pager.<cmd>`, handed down to every child. With the
+# fsmonitor pinned off, that is all those gits run of what they absorb —
+# held to git on a terminal, every program key planted in the absorbed
+# repository and in one nested in it (tests/test_claims.py; the first
+# proof ran with no terminal, where no pager starts). Judging those
+# children instead refused them: git died "could not recurse into
+# submodule" after moving the first gitdir, and a repository nested in the
+# vendored one was a refusal with no way out. [177]
+ABSORB_ENV = (("GIT_PAGER", "cat"),)
 
 
 def _absorbs_nested(rest: list[str] | None) -> bool:
     """`git submodule absorbgitdirs [-q] [--] [<path>…]`, the way out named
     by the nested-repository refusal: it moves the nested gitdir under
-    `.git/modules/` and runs nothing of it but the in-process fsmonitor,
-    which the pin disarms (PINNED_CONFIG; held to git in test_claims.py).
-    Not when the pin is off (GITBLOCKER_KEEP_FSMONITOR). The refusal named
-    this command and refused it. [149]"""
+    `.git/modules/`, and those of the repositories nested in it, and runs
+    nothing of them but the in-process fsmonitor, which the pin disarms
+    (PINNED_CONFIG), and a pager, which ABSORB_ENV turns off — both held
+    to git in test_claims.py. Not when the pin is off
+    (GITBLOCKER_KEEP_FSMONITOR). The refusal named this command and
+    refused it. [149]"""
     if not rest or rest[:2] != ["submodule", "absorbgitdirs"] or _env_bool("GITBLOCKER_KEEP_FSMONITOR"):
         return False
     return all(a in ("-q", "--quiet", "--") or not a.startswith("-") for a in rest[2:])
@@ -4866,6 +4889,8 @@ def run_git(args: list[str], orig: Path, newrepo: NewRepo | None, git: str,
     the clone's own auto-trust, takes as a whole."""
     os.chdir(orig)
     pin_config_env()
+    if _absorbs_nested(_COMMAND):
+        os.environ.update(ABSORB_ENV)    # [177]
     if judged is not None:
         args = keep_attached(args, orig)
     if newrepo is None and after is None:

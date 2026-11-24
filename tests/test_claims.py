@@ -24,7 +24,7 @@ import pytest
 
 import gitblocker as gb_mod
 from tests.attacks._helpers import conflicting_notes, git_has
-from tests.conftest import GB, REAL_GIT
+from tests.conftest import GB, REAL_GIT, write_exec
 from tests.test_commands import EDITOR, _gitlink_in_head, _gitlink_in_head_volatile_zone, _typechange_to_repo
 
 
@@ -924,6 +924,106 @@ def test_absorbgitdirs_runs_only_the_pinned_fsmonitor(gb: GB, repo: Path, tmp_pa
         assert gb.git(*pre, "submodule", "absorbgitdirs", cwd=r).rc == 0
         assert (r / "vendor/.git").is_file()
         assert mark.exists() == expect, ("pin" if pin else "control", mark.exists())
+
+
+def _on_a_terminal(argv: list[str], cwd: Path, env: dict) -> int:
+    """Run `argv` with a pseudo-terminal as its controlling terminal and as
+    stdin, stdout and stderr: where git starts a pager."""
+    import fcntl
+    import os
+    import pty
+    import select
+    import subprocess
+    import termios
+    import time
+    master, slave = pty.openpty()
+
+    def preexec() -> None:
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave,
+                            preexec_fn=preexec, close_fds=True)
+    os.close(slave)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.2)
+        if ready:
+            try:
+                if not os.read(master, 4096):
+                    break
+            except OSError:
+                break
+        if proc.poll() is not None and not ready:
+            break
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+    os.close(master)
+    return proc.returncode
+
+
+# What `git submodule absorbgitdirs` runs of the repositories it absorbs.
+# Every key of PROGRAM_KEYS, the pagers of the commands git runs there and a
+# hooks directory, planted at once, each with its own marker.
+_ABSORB_KEYS = {**PROGRAM_KEYS, "pager.submodule--helper": "{p}", "pager.submodule": "{p}",
+                "pager.absorbgitdirs": "{p}", "alias.submodule--helper": "!{p}", "core.hooksPath": "{d}"}
+_ABSORB_PINNED = {"core.fsmonitor"} | {k for k in _ABSORB_KEYS if k == "core.pager" or k.startswith("pager.")}
+
+
+def _vendored_with_everything(gb: GB, base: Path, where: str) -> tuple[Path, Path]:
+    """A repository with a vendored one under a gitlink, declared, and a
+    second one nested in it; `where` (`vendor` or `deep`) holds every key.
+    Returns the repository and the directory of the markers."""
+    repo, fired, scripts = base / "repo", base / "fired", base / "scripts"
+    fired.mkdir(parents=True)
+    assert gb.git("init", "-q", str(repo)).rc == 0
+    (repo / "f").write_text("a\n")
+    assert gb.git("add", "f", cwd=repo).rc == 0 and gb.git("commit", "-qm", "i", cwd=repo).rc == 0
+    vendor, deep = repo / "vendor", repo / "vendor/deep"
+    for d, name in ((vendor, "v"), (deep, "d")):
+        assert gb.git("init", "-q", str(d)).rc == 0
+        (d / name).write_text("x\n")
+        assert gb.git("add", name, cwd=d).rc == 0 and gb.git("commit", "-qm", name, cwd=d).rc == 0
+    (vendor / ".gitmodules").write_text('[submodule "deep"]\n\tpath = deep\n\turl = ./deep\n')
+    assert gb.git("add", "deep", cwd=vendor).rc == 0
+    (repo / ".gitmodules").write_text('[submodule "vendor"]\n\tpath = vendor\n\turl = ./vendor\n')
+    assert gb.git("add", "vendor", cwd=repo).rc == 0
+    target = vendor if where == "vendor" else deep
+    for key, tpl in _ABSORB_KEYS.items():
+        script = scripts / key
+        # A pager is fed git's output: it reads it, or git dies of the closed pipe.
+        drain = "cat >/dev/null 2>&1\n" if key in _ABSORB_PINNED and key != "core.fsmonitor" else ""
+        write_exec(script, f"#!/bin/sh\n: > '{fired / key}'\n{drain}")
+        value = tpl.format(p=script, d=scripts / "hooks")
+        assert gb.git("config", key, value, cwd=target).rc == 0, key
+    for hook in ("post-checkout", "pre-commit", "reference-transaction", "post-index-change"):
+        write_exec(scripts / "hooks" / hook, f"#!/bin/sh\n: > '{fired / 'core.hooksPath'}'\n")
+    return repo, fired
+
+
+@pytest.mark.parametrize("where", ["vendor", "deep"])
+def test_absorbgitdirs_on_a_terminal_runs_the_fsmonitor_and_a_pager_alone(gb: GB, tmp_path: Path,
+                                                                        where: str) -> None:
+    """[177] gitblocker lets `git submodule absorbgitdirs` through a nested
+    repository, and the gits that command starts in the repositories it
+    absorbs read configs nobody judged. The claim: with the fsmonitor
+    pinned off and the pager off (`GIT_PAGER=cat`), none of it runs — held
+    here on a terminal, where a pager starts: the first proof ran without
+    one and missed `pager.submodule--helper`. The control: the raw git
+    alone runs that pager, and nothing outside the fsmonitor and a pager."""
+    from tests.conftest import REAL_GIT
+    repo, fired = _vendored_with_everything(gb, tmp_path / "alone", where)
+    assert _on_a_terminal([REAL_GIT, "submodule", "absorbgitdirs", "--", "vendor"], repo, gb.raw_env) == 0
+    ran = {p.name for p in fired.iterdir()}
+    assert "pager.submodule--helper" in ran, f"invalid control: git no longer pages in the absorbed repository {ran}"
+    assert ran <= _ABSORB_PINNED, f"the raw git runs more than the fsmonitor and a pager: {sorted(ran - _ABSORB_PINNED)}"
+    repo, fired = _vendored_with_everything(gb, tmp_path / "pinned", where)
+    env = {**gb.raw_env, "GIT_PAGER": "cat"}
+    rc = _on_a_terminal([REAL_GIT, "-c", "core.fsmonitor=false", "submodule", "absorbgitdirs", "--", "vendor"],
+                        repo, env)
+    assert rc == 0 and (repo / ".git/modules/vendor/modules/deep/HEAD").exists()
+    assert not list(fired.iterdir()), f"ran under the pin, the pager off: {sorted(p.name for p in fired.iterdir())}"
 
 
 # ================== the notes of a stopped `notes merge` are data ([153])

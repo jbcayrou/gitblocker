@@ -28,7 +28,9 @@ paid for by a bypass.
   reader executes from a repository nobody judged, [126]; the proof is the
   in-process table), `NEVER_RESUMES`/`SEQUENCE_ENDS` (commands that never
   run a todo line, [147]), the two ways out let through a structural
-  refusal (`_repairs_split_index` [148], `_absorbs_nested` [149]),
+  refusal (`_repairs_split_index` [148], `_absorbs_nested` [149], the
+  second with no pager, `ABSORB_ENV` [177]: what its children run of the
+  repositories it absorbs, held to git on a terminal),
   `WORKTREE_WRITES` (the `git worktree` subcommands whose own two
   pointers are accepted after gitblocker ran them, [155]) and
   `WORKTREE_PATHS`/`WORKTREE_ADD_VALUES` (the subcommands whose path

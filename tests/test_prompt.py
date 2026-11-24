@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import GB, GITBLOCKER
+from tests.conftest import GB, GITBLOCKER, write_exec
 
 # ------------------------------------------------------------------ auto-accept
 
@@ -319,6 +319,41 @@ def test_absorbgitdirs_through_gitblocker_runs_nothing(gb: GB, repo: Path, tmp_p
     r = gb.run("trust", cwd=repo)
     assert r.rc == 0, r.text
     assert not gb.check(repo).blocked
+
+
+def test_absorbgitdirs_runs_no_pager_of_what_it_absorbs(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[177] the way out the refusal names, typed on a terminal. git moves
+    the nested gitdir under `.git/modules/`, then starts a git in it to
+    absorb what is nested there — a child the marker covers, the gitdir
+    being under `modules/` by then — and that git paged with the
+    `pager.submodule--helper` of a config nobody had seen: of the vendored
+    repository, or of one the sandbox planted inside it, `vendor/deep`,
+    while the refusal said to inspect `vendor/.git/config`. Nothing runs;
+    both are absorbed; the next command shows each config, whole."""
+    from tests.test_nested import plant_nested
+    mark = tmp_path / "PAGED"
+    (repo / ".gitmodules").write_text('[submodule "vendor"]\n\tpath = vendor\n\turl = ./vendor\n')
+    gb.trust(repo)                                     # the user declared it; nothing is nested there yet
+    vendor = plant_nested(gb, repo, tmp_path / "EXEC", evil=False)
+    deep = vendor / "deep"
+    assert gb.git("init", "-q", str(deep)).rc == 0
+    (deep / "d").write_text("d\n")
+    assert gb.git("add", "d", cwd=deep).rc == 0 and gb.git("commit", "-qm", "d", cwd=deep).rc == 0
+    pager = tmp_path / "pager.sh"
+    write_exec(pager, f"#!/bin/sh\n: > '{mark}'\ncat >/dev/null 2>&1\n")
+    assert gb.git("config", "pager.submodule--helper", str(pager), cwd=deep).rc == 0
+    (vendor / ".gitmodules").write_text('[submodule "deep"]\n\tpath = deep\n\turl = ./deep\n')
+    assert gb.git("add", "deep", cwd=vendor).rc == 0
+    assert gb.git("add", "vendor", cwd=repo).rc == 0
+    r = gb.check(repo)
+    assert r.blocked and "absorbgitdirs -- vendor" in r.err, r.text
+    rc, _, tty = run_with_tty(gb, ["git", "submodule", "absorbgitdirs", "--", "vendor"], repo, None)
+    assert rc == 0, tty
+    assert not mark.exists(), f"the pager of a repository nobody judged ran\n{tty}"
+    assert (repo / ".git/modules/vendor/modules/deep/HEAD").exists(), tty
+    rc, _, tty = run_with_tty(gb, ["git", "status"], repo, "n")
+    assert rc != 0 and "[y/N]" in tty and "submodule--helper" in tty, tty      # shown, whole ([168])
+    assert not mark.exists()
 
 
 def test_absorbgitdirs_refused_without_the_pin(gb: GB, repo: Path, tmp_path: Path) -> None:

@@ -1494,6 +1494,30 @@ gitblocker.py refer to this list (how the project reviews itself: DESIGN.md,
      contradicted the function's own contract. Found by the fifth
      agentic audit, 2026-11-23. Fix: for a removal, an id present
      afterwards is a refusal.
+[177] RCE on the way out gitblocker itself names: `git submodule
+     absorbgitdirs -- vendor`, let through a nested repository under the
+     fsmonitor pin ([149]) on the claim that it runs nothing of it. It
+     moves the nested gitdir under `.git/modules/`, then starts a git in
+     it — `submodule--helper absorbgitdirs` — to absorb what is nested
+     there. That child is gitblocker; its gitdir being under `modules/` by
+     then, the marker covers it (the gitdir roots are read from the disk
+     at the child's time, [107]), and the raw git reads a config nobody
+     has seen: on a terminal it pages with its `pager.submodule--helper`.
+     Planted in the vendored repository, or in a second one the sandbox
+     nests in it (`vendor/deep`, a gitlink in `vendor`'s index) while the
+     refusal says to inspect `vendor/.git/config` and `vendor/.git/hooks`,
+     both clean. [149]'s proof ran with no terminal, where no pager
+     starts. Found by the fifth agentic audit, 2026-11-23. Fix: that
+     command runs with `GIT_PAGER=cat` (ABSORB_ENV), handed down to every
+     child; with the fsmonitor pinned off it is all those gits run of
+     what they absorb — held to git on a terminal, every program key
+     planted in the absorbed repository and in one nested in it
+     (tests/test_claims.py: the raw git alone runs the fsmonitor and that
+     pager, nothing else; pinned, nothing). Everything absorbed is shown
+     at the next command, each config whole ([168]). Left out: judging
+     the child — robust by construction, but git dies "could not recurse
+     into submodule" after moving the first gitdir, and a repository
+     nested in the vendored one became a refusal with no way out.
 """
 from __future__ import annotations
 

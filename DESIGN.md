@@ -338,7 +338,25 @@ entries are reported as "legacy", `gitblocker retrust` re-validates them.
      `core.fsmonitor` while absorbing it (checked on git 2.50), and the
      structural refusal comes before the superproject's fingerprint is
      compared, so sending the user to the raw git ran whatever the sandbox
-     had planted. Not under `GITBLOCKER_KEEP_FSMONITOR`. **The same rule inside every submodule**
+     had planted. Not under `GITBLOCKER_KEEP_FSMONITOR`. **And with no
+     pager** (`ABSORB_ENV`, [177]): the command moves the nested gitdir
+     under `.git/modules/`, then starts a git *in it* to absorb what is
+     nested there, and so on down — gits the marker covers, their gitdir
+     being under `modules/` by then, reading configs nobody has seen yet.
+     On a terminal such a git paged with that config's
+     `pager.submodule--helper`: the vendored repository's, or that of a
+     second repository the sandbox nested in it (`vendor/deep`) while the
+     refusal named `vendor/.git/config` to inspect. `GIT_PAGER=cat` is set
+     for that command and handed down; with the fsmonitor pinned off, it
+     is all those gits run of what they absorb — every program key planted
+     in the absorbed repository and in one nested in it, on a terminal,
+     the raw git alone as the control (`tests/test_claims.py`; [149]'s
+     proof had no terminal, where no pager starts). What was absorbed is
+     shown at the next command, each config whole ([168]). Judging those
+     children instead — robust by construction — was left out: git dies
+     "could not recurse into submodule" once the first gitdir is moved, and
+     a repository nested in the vendored one becomes a refusal with no way
+     out, the absorb refused at the same place. **The same rule inside every submodule**
      (`check_indexes`, `check_nested_git`): the gitlinks of
      `modules/<x>/index` and the `.gitmodules` of the submodule's tree
      (from its `core.worktree`) name nested repositories that must have a
