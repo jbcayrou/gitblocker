@@ -608,7 +608,7 @@ def test_git_prefix_not_asked_without_the_mark(gb: GB, repo: Path, monkeypatch) 
         raise AssertionError("git_prefix called")
     monkeypatch.setattr(gb_mod, "git_prefix", boom)
     assert gb.git("config", "core.hooksPath", ".githooks", cwd=repo).rc == 0
-    assert gb.git("config", "--global", "include.path", "~/inc.cfg").rc == 0
+    assert gb.git("config", "include.path", "~/inc.cfg", cwd=repo).rc == 0
     gb_mod.config_refs(gb_mod.open_repo(repo))
 
 

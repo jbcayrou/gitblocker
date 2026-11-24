@@ -124,7 +124,9 @@ gitblocker itself. The former default `/usr/bin/git` ran Apple's git instead
 of Homebrew's, with another system config.
 
 That git's system config (`<prefix>/etc/gitconfig`, derived from the
-binary's path) is read along with `/etc/gitconfig`; under
+binary's path) is read along with `/etc/gitconfig` — by the readers of
+one global setting (`iter_global_config`), not by the scan behind the
+fingerprint, which reads neither ([179]) —; under
 `GIT_CONFIG_NOSYSTEM` neither is, as for git, which honours it as a
 boolean whatever `GIT_CONFIG_SYSTEM` names ([133]: a system
 `filter.lfs.required = true` named a tree file git never saw). The
@@ -438,7 +440,7 @@ entries are reported as "legacy", `gitblocker retrust` re-validates them.
      ([88]). A symlink there was refused; a hard link is a regular file to
      lstat. Checked inside the tree, the gitdir and the common dir only:
      the sandbox can only `link()` what its mount holds, so both names of
-     a link it made lie there; a program the global config names elsewhere
+     a link it made lie there; a program the config names elsewhere
      (Homebrew ships hard-linked binaries, on the same volume as `$HOME`
      on macOS) is left alone, nothing the sandbox writes shares its inode.
      Outside those zones the rule is carried to the **names of the
@@ -580,7 +582,9 @@ submodule's too, read there during `submodule update` — [125]), the gitfile
 of each submodule or nested worktree (`Repo.gitfiles`). Tracked or not, a
 change requires a `trust`.
 
-**Paths referenced by the config** (`config_refs`): `core.hooksPath` (husky,
+**Paths referenced by the config** (`config_refs`) — the repository's own
+and the command's, not the system and global files ([179], "Config files
+parsed" below): `core.hooksPath` (husky,
 lefthook, pre-commit put the hooks in the tree), `include.path`/`includeIf`
 **followed recursively** (depth 10, git's `MAX_INCLUDE_DEPTH` — stopping
 earlier left a payload at the 7th level), and **any token of a value that
@@ -661,24 +665,27 @@ also read as `url.<base>.insteadOf` / `pushInsteadOf` rewrite it
 (`_rewritten`, once every source is read): a network URL the user's own
 rule turns into a mirror directory is that local repository for git
 ([151]). Every rule that matches, not git's longest match alone: a
-superset, held to git in `test_git_parity.py`. The remote
+superset, held to git in `test_git_parity.py`; a rule of the global
+config is not read ([179]). The remote
 is **opened as receive-pack opens it**, a port of `enter_repo`: `<p>/.git`,
 `<p>`, `<p>.git/.git`, `<p>.git`, the gitfile followed, then `commondir`,
 without the environment (git clears it for the transport); the config and
 hooks/ are the common dir's, its relative values (`core.hooksPath =
-.husky/_`) resolve against its gitdir, where enter_repo chdirs ([67]) — and
-so do the values of the global and system config, which git reads in the
-remote too, and in every submodule's tree; the environment's and `-c`'s in
-the submodules only, where git carries GIT_CONFIG_PARAMETERS ([68]). Every
-key, not the DIR_KEYS alone: a global `hook.<n>.command = ./scripts/pc.sh`
-(git 2.54) ran `sub/scripts/pc.sh` during `submodule update` ([92]). Read
-again there, a token counts only as an explicit relative path (`./x`,
-`scripts/x`): a bare word is run from the PATH, an absolute one was seen
-at the root, and every word of the global config (`user.name = t`) matched
-a file of each submodule. Not covered: a bare-word *argument* of a global
-program (`sh pc.sh`) in a submodule, the [71]/[74] boundary; aliases are
-not read again (git runs one where the user types it, and a git run from a
-submodule is checked with it as root) — a
+.husky/_`) resolve against its gitdir, where enter_repo chdirs ([67]). The
+values of the environment and `-c` are read again in every submodule's
+tree, where git carries GIT_CONFIG_PARAMETERS — not in a local remote, for
+which git clears it ([68]). Every key, not the DIR_KEYS alone: `-c
+hook.<n>.command=./scripts/pc.sh` (git 2.54) runs `sub/scripts/pc.sh`
+during `submodule update` ([92]). Read again there, a token counts only as
+an explicit relative path (`./x`, `scripts/x`): a bare word is run from
+the PATH, an absolute one was seen at the root, and every word of a value
+(`user.name = t`) matched a file of each submodule. Not covered: a
+bare-word *argument* of such a program (`sh pc.sh`) in a submodule, the
+[71]/[74] boundary; aliases are not read again (git runs one where the
+user types it, and a git run from a submodule is checked with it as root).
+The values of the global and system config, which git reads in the remote
+and in every submodule too, are not read at all ([179], Known
+limitations). A
 `file://` URL is read as parse_connect_url reads it — percent-decoded
 whole, the host part dropped (`file://host/p`, `file://[a/b]/p`) ([69]) — and
 `remote.pushDefault`, `branch.<b>.pushRemote` and `branch.<b>.remote` are
@@ -694,8 +701,13 @@ like git's parse-options reads `push` (`--repo`, abbreviated long options,
 `-o` and its value; a relative path from the root); the repository itself
 (`push . main:x`) and the path of a configured remote pass. A configured
 remote is a name the trusted config gives a url or pushurl: a `[remote "x"]`
-section without one (a global `remote.origin.prune`) is no remote for git,
-which takes `x` as a path ([82]). `git archive
+section without one (a lone `remote.origin.prune`) is no remote for git,
+which takes `x` as a path ([82]). A name the system or global config
+gives a url is a remote for git too: the push check reads those files for
+the names (`_global_remote_names`) — without them `git push docs`, with a
+repository `docs` in the tree, was refused as a push to that path — and
+for nothing else: where such a remote leads, and what a rule of those
+files makes of a URL of the command line, is not watched ([179]). `git archive
 --remote=<path>` gets the same check ([70]: upload-archive runs the
 remote's `tar.<format>.command`), its option read as cmd_archive reads it
 (no abbreviation, last one wins, `--no-remote`, `-o`/`--output`/`--exec`
@@ -751,20 +763,34 @@ its own and uses the main repository's), the `config` of every submodule
 gitdir (`.git/modules/<x>/config`, `_submodule_configs`) with its relative
 values resolved against **the submodule's tree** (its `core.worktree`):
 hashed before, never parsed, so the hooksPath and alias scripts it names were
-not watched ([39]), then `/etc/gitconfig` (or
-`GIT_CONFIG_SYSTEM`), `~/.gitconfig`, `GIT_CONFIG_GLOBAL`,
-`$XDG_CONFIG_HOME/git/config`. Their values name paths the sandbox can write
-— a **global** `core.hooksPath` or `include.path` pointing into the mounted
-volume was a complete bypass ([16]). These files are **parsed, never
-hashed**: the sandbox cannot write them, whoever can (`$HOME` mounted) can
-write the state directory too, and hashing them turned every registered
-repository "modified" at each `git config --global` or `git lfs install`
-([56]; a former scope `global`, with a grouped review in `retrust`, is
-gone). A reader of one global setting (`safe.bareRepository` for the
-warning, `init.templateDir` for auto-trust) goes through
-`iter_global_config`: the same files and the files they include, so that a
-setting kept in an included file is seen — `safe.bareRepository = explicit`
-there drew the warning anyway ([85]). Last, the **config git takes from its
+not watched ([39]). **Not the system and global config** — `/etc/gitconfig`
+(or `GIT_CONFIG_SYSTEM`), `~/.gitconfig`, `GIT_CONFIG_GLOBAL`,
+`$XDG_CONFIG_HOME/git/config` and the files they include: **neither hashed
+nor read** ([179]). The sandbox cannot write them, and whoever can (`$HOME`
+mounted) can write the state directory too. Hashed, they turned every
+registered repository "modified" at each `git config --global` or `git lfs
+install` ([56]; a former scope `global`, with a grouped review in
+`retrust`, is gone). Read for the paths they name ([16]), they did the
+same at each edit of a hook of `~/.githooks`, of a file `~/.gitconfig`
+includes, of a program it names: files of the machine, the same for every
+repository, held in every repository's reference. The fingerprint is the
+repository's. What that gives up — a global value naming a path the
+sandbox *can* write, a relative `core.hooksPath = .githooks` above all —
+is under Known limitations. A reader of one global setting goes through
+`iter_global_config`: those files and the files they include, so that a
+setting kept in an included file is seen — `safe.bareRepository =
+explicit` there drew the warning anyway ([85]). Two kinds. The **gates**,
+which decide something about a command and refuse on a file they cannot
+parse: `init.templateDir` for auto-trust, the names of the remotes for the
+push check, the `insteadOf` rules for the auto-accept of a remote. The
+**warnings** printed where the user reads the output (`global_settings`,
+read once): `safe.bareRepository`, and at a trust `core.splitIndex` and
+`submodule.active`, whose way out names the file that holds the value
+(`git config --file <f> --unset …`: the plain form does not reach a
+global one), and what those files name in the work tree, which nothing
+watches (`global_named_in_tree`, Known limitations); a file they cannot
+parse is said once and fails nothing — the trust is recorded by then. Last, the **config git
+takes from its
 environment and command line** (`env_config`: `GIT_CONFIG_PARAMETERS` in
 both of git's quoting syntaxes, `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/
 `VALUE_n`, and in exec mode the `-c`/`--config-env` of the command,
@@ -786,10 +812,9 @@ path. gitblocker watched `<root>/:(optional).githooks` ([91]). Not for
 inside an included file resolves against that file **as git opened it**:
 through a symlink, the link's directory, not the target's ([94]); the files
 are queued as opened, canonicalised only to be hashed. One file is read
-once per (file, base, origin), not once: a `~/team.gitconfig` included by
+once per (file, base), not once: a `~/team.gitconfig` included by
 the superproject's config and a submodule's has its relative values
-resolved in each, and one included by the local and the global config
-keeps its global origin ([93]). A token is a candidate after each letter
+resolved in each ([93]). A token is a candidate after each letter
 of a leading short option too (`ssh -F./c`, `-vF./c`: `-v`, then `-F`
 holding the rest): the whole word was dropped and ssh read a file nobody
 watched ([96]).
@@ -888,12 +913,13 @@ refusal message.
 order); `Repo` (root/gitdir/common/anchor, `nested` and `gitfiles` cached) →
 `open_repo` (gitfile, commondir, `core.worktree`);
 `check_structure` (refuses; `check_indexes`, `check_volatile_readers`);
-`ConfigScan` (one pass over every config source: `refs`, what the config
-makes git read outside the gitdir; `remote_names`; `cmd`, the aliases;
-`add` records a path, `consider` reads one entry, `run` orders the
-sources; `config_refs(repo)` builds one; `DIR_KEYS` for the keys that
-accept a directory; `global_config_files` / `iter_global_config` for the
-system/global config); `manifest` (dict `(scope, path) → Entry`) with
+`ConfigScan` (one pass over the repository's config and the command's:
+`refs`, what the config makes git read outside the gitdir; `remote_names`;
+`cmd`, the aliases; `add` records a path, `consider` reads one entry,
+`run` orders the sources; `config_refs(repo)` builds one; `DIR_KEYS` for
+the keys that accept a directory; `global_config_files` /
+`iter_global_config` for the readers of one setting of the system/global
+config, which the scan leaves out, [179]); `manifest` (dict `(scope, path) → Entry`) with
 `walk_gitdir` and `walk_tree`; `inspect(repo) → Inspection` runs the three
 in the only safe order (scan, structure, fingerprint) for every caller —
 `main`, `entries`, `review_pending`, `retrust`, the auto-trust of
@@ -1013,7 +1039,7 @@ basename without `.git`). After git succeeds, `save_trust` is called
   config or a file it includes, global `-c`/`--config-env`,
   `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS` — or a
   file any of those includes (`-c include.path=<file>`, [150]: the gate
-  reads them through the scan's readers, `iter_command_config` and
+  reads them through the config readers, `iter_command_config` and
   `iter_global_config`, and compares no key name of its own) —
   `GIT_TEMPLATE_DIR` ([42]) — it copies hooks from an arbitrary directory the
   sandbox can write. (clone's own `-c` is applied after the template: no
@@ -1151,7 +1177,13 @@ other two for a git that is not the child of another, `interactive`):
    every repository turned "modified" on first open in code-server; git
    ignores the key, VS Code passes the value to `git merge-base`. Same for
    `remote.<n>.url` with a **network** URL and `remote.<n>.fetch`, what
-   `remote add` writes ([145]): pre-commit installs its hook repositories
+   `remote add` writes ([145]) — a network URL once git has rewritten it:
+   a rule of the config being judged is the scan's (the mirror it reaches
+   is an added entry, no change of this kind), a rule of the system or
+   global config is read here (`_global_rewrites`), and a URL one of them
+   turns into a local repository is asked about ([179]: a mirror directory
+   the sandbox writes held a hub, the remote naming it passed as a network
+   one, the next push ran its hooks). pre-commit installs its hook repositories
    with `init --template=`, `remote add`, `fetch` from a hook with no
    terminal, and the fetch was refused on the config the `remote add` had
    just written. Those three run inside the first `git commit`, children
@@ -1344,7 +1376,8 @@ newline, not a gitblocker matter. `git lfs install` writes four
 `filter.lfs.*` keys into the global config: while that file was hashed,
 every registered repository turned "modified" at once (first with one
 unreadable line, then with a diff and a grouped review in `retrust`); since
-[56] the global config is parsed, not hashed, and the command is silent.
+[56] the global config is not hashed (since [179], not read either), and
+the command is silent.
 root running git in a user's repository
 gets "suspicious owner/permissions" on `config` (the file is not root's)
 and an empty state of its own. A rootless podman container writing as its
@@ -1570,8 +1603,8 @@ read) and python 3.9 is not offered — the Linux runner is named
 (`ubuntu-24.04`), and Ubuntu 26.04 is tested with its own git. A new git
 enters the matrix with its inventory.
 
-**`python3 -m pytest`** (~1840 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
-[160], [161] — accepted limitations; ~410 s, ~70 s with `-n 8` on the command line),
+**`python3 -m pytest`** (~1850 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
+[160], [161], [179] — accepted limitations; ~410 s, ~70 s with `-n 8` on the command line),
 to run before any change:
 
 - `tests/attacks/` — **the attack corpus**, one module per family (`gitdir`,
@@ -1901,8 +1934,10 @@ the files, not the order.
   (`update-index --no-split-index`, `config --unset core.splitIndex`) passes ([148]).
 - Parity gaps with git are tracked in `tests/test_git_parity.py` as
   `xfail(strict=True)`; none is open at the moment (the former ones, [46]
-  to [50], and the sh expansions of [58] are fixed). Deliberate divergences,
-  fail-closed: NUL in a config
+  to [50], and the sh expansions of [58] are fixed) — the xfails there are
+  the records of [179], what git runs from the global and system config,
+  which is not read. Deliberate divergences, fail-closed, in every config
+  the scan reads: NUL in a config
   (refused, git truncates), a bad config line (refused, git dies), a
   `core.worktree` holding a tab or a lone CR between two words (refused:
   two gits, two trees, [152]). Where supported gits disagree on a config
@@ -2010,10 +2045,11 @@ the files, not the order.
   and switching between trees prompts each time. The mirror case, two
   gitdirs on one tree, has a key each ([157]); this one — one gitdir
   discovered from the cwd, several trees — keeps the directory's key.
-- A global `core.hooksPath` (or any config path) that is a symlink to a
+- A `core.hooksPath` (or any config path) that is a symlink to a
   directory outside the tree (a stow-managed hooks directory) is refused
   ([75]): the link would have to be watched apart from the directory it
-  reaches. Replace the link by the real path.
+  reaches. Replace the link by the real path. In the repository's config
+  or on the command line; a global one is not read ([179]).
 - A value whose path sh builds from a command's output other than the
   cwd (`$(cd sub && pwd)/t.sh`, `$(cat f)`) is beyond the sh readings
   ([58]): only the forms that reduce to the top of the tree or to a
@@ -2065,10 +2101,67 @@ the files, not the order.
   `GIT_EXTERNAL_DIFF`, `GIT_SEQUENCE_EDITOR`, `GIT_EXEC_PATH`) are not
   read: a value naming a script of the volume is the same class as a
   `PATH` directory in it (above), not fingerprinted.
-- The system and global config files are parsed for the paths they name,
-  not hashed ([56]): a global change that names no file of the volume
-  (`alias.x = !curl …`, `core.pager`) is not seen. Writing `~/.gitconfig`
-  takes the same access as writing the state directory: out of the model.
+- **Accepted [179], a decision (2026-11-24): the system and global config
+  are not read.** The fingerprint is the repository's: its gitdirs, what
+  *its* config names, what the command's `-c` names. What `~/.gitconfig`,
+  the XDG file, `/etc/gitconfig` and the files they include name — a hooks
+  directory, a template directory, an include, a program, a mirror behind
+  `insteadOf` — is the machine's and is watched nowhere. Read ([16]), those files sat in every
+  repository's reference: one edited hook of `~/.githooks` refused every
+  registered repository at once, as hashing the config file itself had
+  ([56]), and every word of a global string value was a candidate file of
+  every tree (the global half of [129]). The sandbox cannot write them —
+  writing `~/.gitconfig` takes the same access as writing the state
+  directory, out of the model — so what is given up is a global value
+  naming a path the sandbox *can* write:
+  - a **relative** one, which git resolves in every repository it enters:
+    `core.hooksPath = .githooks` (or `:(optional).githooks`),
+    `hook.<n>.command = ./scripts/x`. The sandbox rewrites
+    `<repo>/.githooks/pre-commit` and the next `git commit` runs it — in
+    the tree, in a submodule (`submodule update`), in a local remote
+    (`push`) — with no file of the gitdir changed ([16] [68] [91] [92];
+    replayed on git 2.50: refused before, run now);
+  - an **absolute** one inside a directory the user mounts: a hooks
+    directory or an included file kept in a dotfiles checkout a sandbox
+    works on ([16] [127]), a mirror directory behind a global
+    `url.<dir>.insteadOf` ([151]).
+  Way out: keep what the global config names outside anything a sandbox
+  mounts, by absolute path — what a global `core.hooksPath` is for as a
+  prevention layer — and set a relative hooksPath in the repository's own
+  config (`git config core.hooksPath .githooks`), where it is read,
+  resolved and watched as before; so are an include of that config, an
+  alias's `-c` and the command line. **Said at a trust**, as the other
+  accepted limitations are (`warn_accepted_limitations`): where the
+  global config names files of this work tree or of a submodule's
+  (`global_named_in_tree`: a hooks or template directory, an include, a
+  script by an explicit relative path), `trust` and the auto-trust of a
+  clone list them with that way out. Not a bare word, which git runs
+  from the PATH — `init.defaultBranch = main` would name a file `main`
+  at every trust; not what the global config names elsewhere. A global `core.hooksPath` resolving
+  to the root of the tree is no longer refused ([59]); a remote of the
+  global config that is a local repository, and a URL of the command
+  line a global rule rewrites into one, are pushed to unwatched ([45]
+  [62] [151]). Still read from those files, outside the scan ("Config
+  files parsed"): by the gates — `init.templateDir` (auto-trust), the
+  names of the remotes (push check), the `insteadOf` rules (auto-accept
+  of a remote) — and by the warnings (`safe.bareRepository`, and at a
+  trust `core.splitIndex` and `submodule.active`). A global config
+  gitblocker cannot parse (a line git dies on, a NUL) no longer refuses
+  every command: the check does not read it, the warnings say they could
+  not, the gates still fail closed on it (a clone, a push to an unnamed
+  destination are refused). Records: `GLOBAL_NOT_READ` and
+  `global_not_read` (tests/conftest.py) — eleven attacks of the corpus
+  as xfail(strict); the global and system halves of the [68] parity
+  tables, the global include, [59] and the rewritten destination, whose
+  oracle (git runs it) is asserted before the expected failure is
+  recorded; the other side is
+  `test_what_the_global_config_names_is_no_part_of_the_fingerprint`. A
+  reference written before holds what the global config named — entries
+  that would show as `removed`, for files still there, with `restore`
+  named as a way out: the format version moved with the content
+  (`FORMAT_VERSION` 5), such a reference is "trusted by an older
+  version", compared with nothing, and `gitblocker retrust` re-validates
+  them in bulk.
 - **Accepted [129], strings**: a tree file named after a *string* value of
   the config (`init.defaultBranch = main` and a build output `main`,
   `user.name = t` and a file `t`) is watched and refused once it changes.
@@ -2076,7 +2169,9 @@ the files, not the order.
   source); a string key cannot be proved harmless the same way
   (`git_config_string` reads `core.editor` too), and a hand-curated list
   is not grown without a real case (the rule of [71] [74]). `trust` names
-  the file. xfail record: `test_tree_file_named_like_a_string_value_is_silent`.
+  the file. xfail record: `test_tree_file_named_like_a_string_value_is_silent`
+  (the repository's config; a value of the global config names nothing,
+  that file is not read, [179]).
   Keys of another program (git-lfs's `filter.lfs.required = true`) and
   of a wildcard section compared on its last part (`remote.<n>.prune`)
   are not in the inventory either: the same cost.

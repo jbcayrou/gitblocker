@@ -72,7 +72,7 @@ That silence is the signal.
   `*_HEAD`…). An unknown file is watched, not ignored;
 - the tree files that drive git: `.gitmodules`, `.lfsconfig`, the gitfile of
   each submodule or linked worktree;
-- every path the config makes git execute or read: `core.hooksPath`,
+- every path the repository's config makes git execute or read: `core.hooksPath`,
   `include.path` chains, scripts named in aliases, filters, drivers,
   `credential.helper`… — in the tree or outside it, as long as you could
   write there (a `core.hooksPath` resolving to the root of the tree is
@@ -83,12 +83,16 @@ That silence is the signal.
 - a repository yours borrows objects from (`clone --reference <mirror>`,
   `--shared`): its config and hooks too — git asks it what it holds at
   every fetch;
-- the paths named by the system and global configs: a global
-  `core.hooksPath` pointing into the mounted volume is a bypass otherwise
-  (the files themselves are parsed, not hashed: the sandbox cannot write
-  them). Files git reads as data — a signing key, `commit.template`,
-  `core.excludesFile` — are not watched; a file outside the repository named
-  by a program key is watched but never copied into the state directory.
+- the paths named on the command line (`-c core.hooksPath=…`) and in the
+  environment (`GIT_CONFIG_*`), like those of the repository's config.
+
+Files git reads as data — a signing key, `commit.template`,
+`core.excludesFile` — are not watched; a file outside the repository named
+by a program key is watched but never copied into the state directory.
+**Your global config (`~/.gitconfig`, `/etc/gitconfig`) is not part of the
+fingerprint**, nor is anything it names: it is your machine's, the same for
+every repository, and a sandbox cannot write it — see the limitations for
+what that asks of you.
 
 Every later `git` invocation is checked against that fingerprint first. Any
 deviation, structural anomaly (symlinked `.git`, bare gitdir planted in a
@@ -527,15 +531,25 @@ refused (git itself reads it against two different directories in one run).
 - No desktop notification without a session (ssh, cron, systemd): the
   pending record is still written and the wait still times out; check
   `gitblocker pending` by hand.
-- Your global config is read for the paths it names, not fingerprinted: a
-  `git config --global` that names no file (an alias, a pager) is not seen.
-  Whoever could write it could write gitblocker's state directory too.
+- Your global config is not read, and what it names is not watched:
+  editing `~/.gitconfig`, a hook of `~/.githooks` or a file it includes
+  alerts nowhere — whoever could write them could write gitblocker's state
+  directory too. That holds as long as it names nothing a sandbox can
+  write. Two layouts break it: a **relative** global `core.hooksPath`
+  (`.githooks`: git then runs the hooks of every repository's tree, which
+  the sandbox writes — set it in each repository instead, `git config
+  core.hooksPath .githooks`, where it is watched), and a global path
+  **inside a directory you mount** (hooks or an included file kept in a
+  dotfiles checkout a sandbox works on). `gitblocker trust` says so when
+  your global config names files of the repository's own tree.
 - Bare repositories are refused, not managed. `core.splitIndex` is refused
   (the gitlinks it needs to read live in `sharedindex.*`).
 - Parity with git is checked against git itself in `tests/test_git_parity.py`;
   a gap found there is marked as an expected failure until fixed (none open
-  at the moment). Deliberate, fail-closed divergences: a NUL byte or a line
-  git dies on in a config file is refused.
+  at the moment; the expected failures there record what git runs from the
+  global config, which is not read). Deliberate, fail-closed divergences: a
+  NUL byte or a line git dies on in a config file of the repository is
+  refused.
 
 `DESIGN.md` holds the design notes, the review method and the catalogue of
 the 99 bypasses and false positives found so far (`tests/attacks/`).

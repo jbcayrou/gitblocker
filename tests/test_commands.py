@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.attacks._helpers import commit, make_source
-from tests.conftest import GB, REAL_GIT, write_exec
+from tests.conftest import GB, REAL_GIT, global_not_read, write_exec
 
 
 # ------------------------------------------------------------ trust / diff
@@ -1298,9 +1298,11 @@ def test_hookspath_at_the_root_is_refused_with_the_way_out(gb: GB, repo: Path, v
 
 
 def test_hookspath_at_the_root_from_the_global_config(gb: GB, repo: Path) -> None:
-    """[59] the same from ~/.gitconfig (a repository of global hooks)"""
+    """[59] the same from ~/.gitconfig (a repository of global hooks):
+    not refused any more, the global value is not read ([179])"""
     gb.git("config", "--global", "core.hooksPath", str(repo))
     r = gb.check(repo)
+    global_not_read(r)
     assert r.blocked and "root of the work tree" in r.err, r.text
 
 
@@ -1323,21 +1325,25 @@ PUSH_FORMS = ["{d} main", "-u {d} main", "--repo {d}", "--repo={d}", "--rep {d}"
               "--repo origin {d} main"]
 
 
+@pytest.mark.parametrize("scope", ["local", "global"])
 @pytest.mark.parametrize("key", ["insteadOf", "pushInsteadOf"])
 @pytest.mark.parametrize("cmd", ["push", "archive"])
 def test_destination_rewritten_by_insteadof_is_checked(gb: GB, repo: Path, tmp_path: Path,
-                                                       key: str, cmd: str) -> None:
+                                                       key: str, cmd: str, scope: str) -> None:
     """[151] `git push https://…/hub.git main` under a trusted
     `url.<dir>.insteadOf = https://…/`: git rewrites the URL of the command
     line as it does a remote's and pushes to `<dir>/hub.git`, a local
     repository no config names; `archive --remote=` likewise (insteadOf
-    only). The [62] [70] check read the URL as written."""
+    only). The [62] [70] check read the URL as written. A rule of the
+    global config is not read ([179]): git runs the hub's code, the
+    record."""
     if (cmd, key) == ("archive", "pushInsteadOf"):
         pytest.skip("archive reads the fetch URL")
     mark = tmp_path / "RAN"
     hub = tmp_path / "vol-mirrors/hub.git"
     gb.git("init", "-q", "--bare", str(hub))
-    gb.git("config", "--global", f"url.{tmp_path}/vol-mirrors/.{key}", "https://example.invalid/")
+    where = ["--global"] if scope == "global" else []
+    gb.git("config", *where, f"url.{tmp_path}/vol-mirrors/.{key}", "https://example.invalid/", cwd=repo)
     gb.trust(repo)
     url = "https://example.invalid/hub.git"
     if cmd == "push":
@@ -1349,6 +1355,9 @@ def test_destination_rewritten_by_insteadof_is_checked(gb: GB, repo: Path, tmp_p
         gb.git("config", "tar.x.remote", "true", cwd=hub)
         args = ["archive", f"--remote={url}", "--format=x", "-o", str(tmp_path / "out"), "main"]
     r = gb.run("git", *args, cwd=repo)
+    if scope == "global":
+        assert mark.exists(), f"git did not run the hub's code\n{r.text}"
+        global_not_read(r)
     assert r.blocked and f"[{62 if cmd == 'push' else 70}]" in r.err and not mark.exists(), r.text
     gb.git(*args, cwd=repo)
     assert mark.exists(), "control: git runs the hub's code"
@@ -1488,12 +1497,15 @@ def test_archive_outside_any_repository_allowed_cases(gb: GB, tmp_path: Path) ->
 
 
 def test_push_to_a_remote_section_without_url_is_checked(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[82] a `[remote "origin"]` section without a url (a global
+    """[82] a `[remote "origin"]` section without a url (a lone
     `remote.origin.prune = true`) made `origin` a configured remote for
     gitblocker; git, finding no url, takes `origin` as a path: `<root>/origin`,
-    a bare repository the sandbox planted, whose pre-receive ran."""
+    a bare repository the sandbox planted, whose pre-receive ran. In the
+    repository's config and in the global one, read by the push check for
+    the names of its remotes ([179])."""
     mark = tmp_path / "RAN"
-    gb.git("config", "--global", "remote.origin.prune", "true")
+    gb.git("config", "remote.origin.prune", "true", cwd=repo)
+    gb.git("config", "--global", "remote.origin.tagOpt", "--no-tags")
     gb.trust(repo)
     hub = repo / "origin"
     gb.git("init", "-q", "--bare", str(hub))
@@ -1502,6 +1514,48 @@ def test_push_to_a_remote_section_without_url_is_checked(gb: GB, repo: Path, tmp
     assert r.blocked and "[62]" in r.err and not mark.exists(), r.text
     gb.git("push", "-q", "origin", "main", cwd=repo)
     assert mark.exists(), "control: git pushes to the path"
+
+
+def test_push_to_a_remote_of_the_global_config_is_no_path(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[179] a remote the global config gives a url is a remote for git:
+    `git push docs main` goes there, never to `<root>/docs`, a repository
+    of the tree named like it. The push check, left without the scan's
+    reading of those files, took the name for that path and refused, with
+    the advice to make it a remote. Where the remote leads is not watched."""
+    mark = tmp_path / "RAN"
+    hub = tmp_path / "elsewhere.git"
+    gb.git("init", "-q", "--bare", str(hub))
+    assert gb.git("config", "--global", "remote.docs.url", str(hub)).rc == 0
+    gb.git("init", "-q", "--bare", str(repo / "docs"))
+    write_exec(repo / "docs/hooks/pre-receive", f"#!/bin/sh\ntouch '{mark}'\n")
+    r = gb.run("git", "push", "-q", "docs", "main", cwd=repo)
+    assert r.rc == 0 and "[62]" not in r.err, r.text
+    assert not mark.exists() and gb.git("rev-parse", "-q", "--verify", "main", cwd=hub).rc == 0, \
+        "git pushed to the remote, not to the directory"
+
+
+def test_reference_written_while_the_global_config_was_read_is_legacy(gb: GB, repo: Path) -> None:
+    """[179] a reference of the format before holds what the global config
+    named. Compared entry by entry it showed those `removed` — files still
+    there —, `retrust` skipped the repository and the refusal named
+    `restore`, which rewrote tree files from stale copies. The format
+    version moved with the content: such a reference is "trusted by an
+    older version", compared with nothing, and `retrust` re-validates it."""
+    import json
+    import gitblocker as m
+    assert m.FORMAT_VERSION > 4
+    key = gb.key_for(repo)
+    data = json.loads(key.read_text())
+    data["version"] = 4
+    data["entries"].append({**data["entries"][0], "scope": "ext", "path": "/home/user/.githooks/pre-commit"})
+    key.write_text(json.dumps(data))
+    r = gb.check(repo)
+    assert r.blocked and "trusted by an older version" in r.err, r.text
+    assert "removed" not in r.text and "restore" not in r.text, r.text
+    assert "legacy" in gb.run("list").out
+    r = gb.run("retrust")
+    assert r.rc == 0 and "re-trusted" in r.text, r.text
+    assert not gb.check(repo).blocked
 
 
 def test_push_to_a_remote_with_url_stays_allowed(gb: GB, repo: Path, tmp_path: Path) -> None:
@@ -2589,6 +2643,101 @@ def test_trust_warns_on_a_pathspec_activation(gb: GB, tmp_path: Path) -> None:
     res = gb.run("trust", cwd=r)
     assert res.rc == 0, res.text
     assert "submodule.active = ." in res.err and "unset-all" in res.err, res.text
+
+
+def test_trust_warns_on_a_setting_of_the_global_config(gb: GB, repo: Path) -> None:
+    """[179] the two warnings of `trust` about a setting — `core.splitIndex`
+    ([148]), a `submodule.active` pathspec with the fsmonitor pin off
+    ([126]) — hold for a value of the global config, which the scan
+    behind the fingerprint leaves out."""
+    assert gb.git("config", "--global", "core.splitIndex", "true").rc == 0
+    assert gb.git("config", "--global", "submodule.active", ".").rc == 0
+    cfg = Path(gb.env["HOME"]) / ".gitconfig"
+    r = gb.trust(repo)
+    assert "core.splitIndex = true" in r.err and "submodule.active" not in r.err, r.text
+    assert f"git config --file {cfg} --unset core.splitIndex" in r.err, r.text
+    assert "`git config --unset core.splitIndex`" not in r.err, "the local form reaches no global value"
+    gb.env["GITBLOCKER_KEEP_FSMONITOR"] = "1"
+    r = gb.trust(repo)
+    assert "submodule.active = ." in r.err, r.text
+    assert f"git config --file {cfg} --unset-all submodule.active" in r.err, r.text
+    # The way out, as written: it leaves the setting nowhere.
+    assert gb.git("config", "--file", str(cfg), "--unset", "core.splitIndex").rc == 0
+    assert gb.git("config", "--file", str(cfg), "--unset-all", "submodule.active").rc == 0
+    r = gb.trust(repo)
+    assert "core.splitIndex" not in r.err and "submodule.active" not in r.err, r.text
+
+
+GLOBAL_NAMES = "files the global config names in the work tree"
+
+
+def test_trust_says_what_the_global_config_names_in_the_tree(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[179] what the global config names is not watched; where it names
+    files of this work tree — a relative `core.hooksPath`, a script by an
+    explicit relative path, in the tree and in a submodule's — `trust`
+    says so, with the way out: whoever writes the tree rewrites them
+    unseen. Named in a warning, never watched. Nothing is said of what it
+    names elsewhere (a hooks directory under $HOME), nor of a bare word
+    (`init.defaultBranch = main` and a file `main`: git runs no such file)."""
+    from tests.attacks._helpers import add_submodule
+    home = Path(gb.env["HOME"])
+    write_exec(home / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
+    assert gb.git("config", "--global", "core.hooksPath", str(home / ".githooks")).rc == 0
+    (repo / "main").write_text("ELF\n")
+    assert GLOBAL_NAMES not in gb.trust(repo).err
+    sub = add_submodule(gb, repo, tmp_path)
+    for tree in (repo, sub):
+        write_exec(tree / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
+    write_exec(repo / "tools/run", "#!/bin/sh\nexit 0\n")
+    assert gb.git("config", "--global", "core.hooksPath", ".githooks").rc == 0
+    assert gb.git("config", "--global", "alias.lint", "!./tools/run --all").rc == 0
+    r = gb.trust(repo)
+    line = next((l for l in r.err.splitlines() if GLOBAL_NAMES in l), "")
+    assert "(.githooks sub/.githooks tools/run)" in line, r.text
+    assert "git config core.hooksPath .githooks" in line and "[179]" in line, line
+    assert ".githooks" not in "".join(l for l in r.text.splitlines() if "watched too" in l), r.text
+    write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\necho rewritten\n")
+    assert not gb.check(repo).blocked, "the warning is all there is: the limitation of [179]"
+
+
+def test_trust_says_a_global_hookspath_at_the_root_and_a_clone_says_it_too(gb: GB, repo: Path,
+                                                                          tmp_path: Path) -> None:
+    """[179] a global `core.hooksPath` that is this repository's root — every
+    file at its top a hook, refused while the global config was read
+    ([59]) — is named by its setting; and the auto-trust of a clone, where
+    the user is, prints the warning as `trust` does."""
+    assert gb.git("config", "--global", "core.hooksPath", str(repo)).rc == 0
+    r = gb.trust(repo)
+    line = next((l for l in r.err.splitlines() if GLOBAL_NAMES in l), "")
+    assert f"(core.hookspath={repo})" in line, r.text
+    assert gb.git("config", "--global", "core.hooksPath", ".githooks").rc == 0
+    write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
+    assert gb.git("add", ".githooks", cwd=repo).rc == 0
+    assert gb.git("commit", "-qm", "hooks", cwd=repo).rc == 0
+    r = gb.run("git", "clone", "-q", str(repo), "c", cwd=tmp_path)
+    assert r.rc == 0 and "new repository trusted" in r.err, r.text
+    assert GLOBAL_NAMES in r.err and "(.githooks)" in r.err, r.text
+
+
+@pytest.mark.parametrize("junk", [b"[core\n", b"[x]\n\tk = a\x00b\n"], ids=["bad_line", "nul"])
+def test_unparsable_global_config_fails_neither_check_nor_trust(gb: GB, repo: Path, tmp_path: Path,
+                                                               junk: bytes) -> None:
+    """[179] a global config gitblocker cannot parse — a line git dies on, a
+    NUL git truncates a value at — is no part of a repository's check: the
+    check passes, `trust` and `list` do their work and say what they could
+    not read for their warnings. The gate of auto-trust still fails closed:
+    a clone is refused before git runs."""
+    cfg = Path(gb.env["HOME"]) / ".gitconfig"
+    cfg.write_bytes(cfg.read_bytes() + junk)
+    assert not gb.check(repo).blocked
+    r = gb.run("trust", cwd=repo)
+    assert r.rc == 0 and "trust state recorded" in r.text, r.text
+    assert r.err.count("global config not read") == 1 and str(cfg) in r.err, r.text
+    assert "is not `explicit`" not in r.err, "nothing was read: nothing to say about its value"
+    r = gb.run("list")
+    assert r.rc == 0 and "global config not read" in r.err, r.text
+    r = gb.run("git", "clone", "-q", str(repo), "c", cwd=tmp_path)
+    assert r.blocked and str(cfg) in r.err and not (tmp_path / "c").exists(), r.text
 
 
 def test_clone_autotrust_warns_on_the_pathspec_it_writes(gb: GB, repo: Path, tmp_path: Path) -> None:

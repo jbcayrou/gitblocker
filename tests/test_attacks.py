@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from tests import attacks
-from tests.conftest import GB
+from tests.conftest import GB, GLOBAL_NOT_READ
 
 ATTACKS = attacks.collect()
 
@@ -63,7 +63,20 @@ NO_INHERIT = {
 
 # Known open flaws: the attack is in the corpus, the refusal is not there yet.
 # xfail(strict): a fix makes the test XPASS, then remove the entry.
+# GLOBAL_NOT_READ ([179]): the attacks that need the user's own global
+# config to name a path of the volume.
 OPEN = {
+    "attack_global_hookspath": GLOBAL_NOT_READ,
+    "attack_global_include_path": GLOBAL_NOT_READ,
+    "attack_global_relative_hookspath_in_bare_remote": GLOBAL_NOT_READ,
+    "attack_global_relative_hookspath_in_submodule": GLOBAL_NOT_READ,
+    "attack_optional_hookspath_global": GLOBAL_NOT_READ,
+    "attack_global_config_hook_relative_in_submodule": GLOBAL_NOT_READ,
+    "attack_insteadof_global_reaches_local_hub": GLOBAL_NOT_READ,
+    "attack_hardlink_commit_editmsg_to_global_hook": GLOBAL_NOT_READ,
+    "attack_global_program_in_the_volume_rewritten": GLOBAL_NOT_READ,
+    "attack_global_remote_names_a_local_hub": GLOBAL_NOT_READ,
+    "attack_global_alias_config_hookspath": GLOBAL_NOT_READ,
     "attack_alias_script_after_cd": "[71] accepted limitation (DESIGN.md, Known limitations)",
     "attack_alias_script_in_subshell_after_cd": "[71] accepted limitation (DESIGN.md, Known limitations)",
     "attack_alias_script_glued_to_empty_variable": "[74] accepted limitation (DESIGN.md, Known limitations)",

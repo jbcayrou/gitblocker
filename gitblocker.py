@@ -65,7 +65,8 @@ from functools import cached_property
 from pathlib import Path
 
 VERSION = "0.1.0"    # `gitblocker version`; the package's (ci/build-deb.sh reads this line)
-FORMAT_VERSION = 4   # 4: symlink hashes include the target's content
+FORMAT_VERSION = 5   # 4: symlink hashes include the target's content
+                     # 5: what the system and global config name is no longer an entry ([179])
 
 
 def real_git() -> str:
@@ -1519,7 +1520,9 @@ def _check_index_extensions(data: bytes, off: int, p: Path, oid_size: int) -> No
                 raise Refuse(f"core.splitIndex not supported ({p} is a split index): run "
                              f"`git update-index --no-split-index` then `git config --unset "
                              f"core.splitIndex` (gitblocker lets exactly these two through; git "
-                             f"warns at the first, the second makes it stick)")
+                             f"warns at the first, the second makes it stick — `git config "
+                             f"--global --unset core.splitIndex` if it is your global config "
+                             f"that sets it, which passes once the first is done)")
             raise Refuse(f"{p}: index extension {sig!r} gitblocker does not know; git "
                          f"requires it to read the entries (a newer git?), so their "
                          f"gitlinks cannot be checked")
@@ -2238,14 +2241,17 @@ def pin_config_env() -> None:
 
 def global_config_files() -> list[Path]:
     """System and global config files git reads (git_system_config,
-    git_global_config_paths). Exactly those: a file git was told to skip
-    is not "one too many", its values named tree files git never sees
-    ([133], [140]). The variables are read as git reads them — present
-    or not, not truthy: an empty GIT_CONFIG_SYSTEM / GIT_CONFIG_GLOBAL
-    names no file at all (`""` opens nothing), and a GIT_CONFIG_GLOBAL
-    that names a file *replaces* `~/.gitconfig` and the XDG file. Missing
-    one git reads is a bypass [16]: test_git_parity holds the list to
-    `git config --list --show-origin`."""
+    git_global_config_paths), for the readers of one global setting
+    (iter_global_config); the scan behind the fingerprint reads none of
+    them ([179]). Exactly those: a file git was told to skip is not "one
+    too many", its values named tree files git never sees ([133], [140]).
+    The variables are read as git reads them — present or not, not
+    truthy: an empty GIT_CONFIG_SYSTEM / GIT_CONFIG_GLOBAL names no file
+    at all (`""` opens nothing), and a GIT_CONFIG_GLOBAL that names a
+    file *replaces* `~/.gitconfig` and the XDG file. Missing one git
+    reads hides its `init.templateDir` from the gate of auto-trust (and
+    was a bypass of the scan while it read them, [16]): test_git_parity
+    holds the list to `git config --list --show-origin`."""
     out: list[Path] = []
     # Under GIT_CONFIG_NOSYSTEM git reads no system file at all, whatever
     # GIT_CONFIG_SYSTEM names (git_config_system). [133]
@@ -2279,10 +2285,10 @@ def iter_global_config() -> Iterator[tuple[Path, str, str, str]]:
     """(file, section, key, value) of the system and global config files
     and of the files they include, in git's reading order: INCLUDE_DEPTH
     levels of `include.path` / `includeIf.*.path`, each relative to the
-    including file, the conditions not evaluated (a superset, as in
-    config_refs). For a reader of one global setting; config_refs keeps its
-    own walk, which carries a base and a scope per file and watches the
-    include targets. [85]"""
+    including file, the conditions not evaluated (a superset). For a reader
+    of one global setting (safe_bare_explicit, _template_dir_configured,
+    warn_accepted_limitations); the scan behind the fingerprint
+    (ConfigScan) reads none of these files. [85]"""
     return _iter_config_files(global_config_files())
 
 
@@ -2327,29 +2333,64 @@ SAFE_BARE_HINT = ("`git config --global safe.bareRepository explicit`: git then 
                   "tool that does not go through gitblocker")
 
 
-def safe_bare_explicit() -> bool:
+def _split_index_on(section: str, key: str, value: str) -> bool:
+    """`core.splitIndex = true`: the next index git writes is split, and
+    refused ([31]); said at a trust, for the repository's config (the
+    scan) and for the global one (warn_accepted_limitations). [148]"""
+    return (section, key) == ("core", "splitindex") and bool(_git_maybe_bool(value))
+
+
+GlobalSettings = list[tuple[Path, str, str, str]]
+
+
+def global_settings() -> GlobalSettings | None:
+    """(file, section, key, value) of the system and global config and of
+    the files they include, for the warnings printed where the user reads
+    the output — trust, list, retrust: safe.bareRepository
+    (check_safe_bare) and, at a trust, core.splitIndex and
+    submodule.active (warn_accepted_limitations). Advisory readers,
+    outside the scan ([179]): a file gitblocker cannot parse is said once
+    and gives None — the command these warnings follow has done its work
+    (`trust` has recorded its state) and must not fail on them. A gate
+    does not come here: auto-trust, the push check and the auto-accept of
+    a remote read iter_global_config and refuse."""
+    try:
+        return list(iter_global_config())
+    except Refuse as e:
+        warn(f"global config not read, its settings are not checked (safe.bareRepository, "
+             f"core.splitIndex, submodule.active): {e}")
+        return None
+
+
+def safe_bare_explicit(settings: GlobalSettings | None = None) -> bool:
     """`safe.bareRepository = explicit` in the system or global config or a
     file they include ([85]), read with our parser (never `git config`,
-    which would honour the judged config). Last value wins, as for git."""
+    which would honour the judged config). Last value wins, as for git.
+    `settings`: global_settings(), when the caller holds them."""
     value = None
-    for _, section, key, v in iter_global_config():
+    for _, section, key, v in iter_global_config() if settings is None else settings:
         if section == "safe" and key == "barerepository":
             value = v
     return value is not None and value.strip().lower() == "explicit"
 
 
-def check_safe_bare() -> None:
+def check_safe_bare(settings: GlobalSettings | None) -> None:
     """Warn (without refusing) if safe.bareRepository is not `explicit`.
     Called when the user reads the output: trust, retrust, list. Not on
-    every git command: a warning repeated a hundred times ends up ignored."""
-    if not safe_bare_explicit():
+    every git command: a warning repeated a hundred times ends up ignored.
+    `settings`: global_settings() — None when the global config could not
+    be read, which was said there."""
+    if settings is not None and not safe_bare_explicit(settings):
         warn(f"safe.bareRepository is not `explicit` in the global config; "
              f"recommended: {SAFE_BARE_HINT}")
 
 
 class ConfigScan:
-    """What the configuration git will read says about one repository,
-    gathered in a single pass over every config source (`run`):
+    """What the repository's own configuration says about it, gathered in
+    a single pass (`run`) over the config files of its gitdirs and the
+    config of the command (`-c`, GIT_CONFIG_*). Not the system and global
+    config files: what those name is the machine's, the same for every
+    repository, and is no part of a repository's fingerprint.
 
     - `refs`: paths outside the gitdir that the config makes git execute or
       read — core.hooksPath, include.path (recursive), any token of a value
@@ -2358,7 +2399,7 @@ class ConfigScan:
       git: root gitfile, .gitmodules, each submodule's gitfile.
     - `remote_names`: every remote the repository's config defines (not a
       remote's own config) that has a url: what `git push <name>` resolves
-      through config. A `[remote "x"]` section without one (a global
+      through config. A `[remote "x"]` section without one (a lone
       `remote.origin.prune`) is not a remote for git: `push x` takes `x` as
       a path. [62] [82]
     The `-c` an alias carries is config like any other: what it names is
@@ -2371,9 +2412,9 @@ class ConfigScan:
     def __init__(self, repo: Repo, foreign: bool = False) -> None:
         self.repo = repo
         # `foreign`: the repository is a child's at another root than the
-        # judged one (Judged.covers): the values of global origin and of
-        # the environment are read as the parent read them against that
-        # tree — relocated, explicit relative paths only ([92]).
+        # judged one (Judged.covers): the values of the environment are
+        # read as the parent read them against that tree — relocated,
+        # explicit relative paths only ([92]).
         self.foreign = foreign
         self.out: dict[Path, str] = {}
         self.refs: list[tuple[str, Path]] = []
@@ -2390,18 +2431,15 @@ class ConfigScan:
         # `core.splitIndex = true` in some source: the next index git writes
         # is split, and refused ([31]); said at trust. [148]
         self.split_index = False
-        # Values of global origin and of the environment / `-c` (an alias's
-        # `-c` included): resolved again against each local remote and
-        # submodule. [68] [92]
-        self.global_vals: list[tuple[str, str, str]] = []
+        # Values of the environment / `-c` (an alias's `-c` included):
+        # resolved again against each submodule. [68] [92]
         self.env_vals: list[tuple[str, str, str]] = []
-        self.remote_bases: set[Path] = set()
         # `url.<base>.insteadOf` / `pushInsteadOf` as (prefix, base), and
         # the values read as a remote's URL with the directory they resolve
         # against: rewritten once every source is read (run). [151]
         self.rewrites: list[tuple[str, str]] = []
         self.urls: list[tuple[str, Path]] = []
-        self.nxt: list[tuple[Path, Path, bool, bool]] = []    # config files found while reading
+        self.nxt: list[tuple[Path, Path, bool]] = []          # config files found while reading
         self.tokens_seen: set[tuple[str, Path]] = set()
 
     def add(self, literal: Path, p: Path, allow_dir: bool = False) -> None:
@@ -2484,23 +2522,21 @@ class ConfigScan:
             out[p] = "ext"
 
     def consider(self, section: str, key: str, value: str, base: Path, cfdir: Path | None,
-                 remotes: bool, glob: bool = False, relocated: bool = False) -> None:
+                 remotes: bool, relocated: bool = False) -> None:
         """One config entry. `base`: the directory its relative values resolve
         against (the root, a submodule's tree, a remote's gitdir); `cfdir`:
         the directory of the file it comes from (None: environment or
-        command line); `remotes`: follow the remotes it names; `glob`: the
-        entry is of global origin (system, global, XDG, their includes);
-        `relocated`: a global or `-c` value read again against another base
-        than the root (run)."""
+        command line); `remotes`: follow the remotes it names; `relocated`:
+        a `-c` value read again against another base than the root (run)."""
         repo = self.repo
         if section == "submodule" and key == "active":
             self.active_pathspecs.add(value)
-        if (section, key) == ("core", "splitindex") and _git_maybe_bool(value):
+        if _split_index_on(section, key, value):
             self.split_index = True              # warned at trust [148]
         if remotes and section.startswith("url.") and key in ("insteadof", "pushinsteadof"):
             self.rewrites.append((value, section[len("url."):]))
         # `git push <name>` resolves <name> through the repository's config
-        # (local, global, environment: those whose base is the root), not a
+        # (local, environment: those whose base is the root), not a
         # submodule's: there, `<name>` is a path.
         if base == repo.root and section.startswith("remote.") and key in ("url", "pushurl"):
             self.remote_names.add(section[len("remote."):])
@@ -2522,9 +2558,7 @@ class ConfigScan:
                     val = "true" if v is None else v
                     if base == repo.root:
                         self.env_vals.append((*sk, val))
-                    self.consider(*sk, val, base, None, remotes, False, relocated)
-        if glob and alias is None:
-            self.global_vals.append((section, key, value))
+                    self.consider(*sk, val, base, None, remotes, relocated)
         if (section, key) in DIR_KEYS:
             # `:(optional)<path>` (git 2.52, a pathname value): the path,
             # the variable unset when it does not exist. Exactly that prefix,
@@ -2560,7 +2594,7 @@ class ConfigScan:
             # target's. [94]
             literal, p = include_path(value, cfdir or base)
             if is_file(p):
-                self.nxt.append((literal, base, remotes, glob))
+                self.nxt.append((literal, base, remotes))
             self.add(literal, p)
         elif remotes and ((section.startswith("remote.") and key in ("url", "pushurl"))
                           or (section == "remote" and key == "pushdefault")
@@ -2590,11 +2624,11 @@ class ConfigScan:
             return
         else:
             for tok in _glued_values(_value_tokens(value)):
-                # Read again against a submodule or a remote, a token is a
-                # candidate only as an explicit relative path (`./x`,
-                # `scripts/x`): a bare word is run from the PATH, an absolute
-                # path was seen at the root, and every word of the global
-                # config (`user.name = t`) matched a file of each submodule. [92]
+                # Read again against a submodule, a token is a candidate
+                # only as an explicit relative path (`./x`, `scripts/x`): a
+                # bare word is run from the PATH, an absolute path was seen
+                # at the root, and every word of a value (`user.name = t`)
+                # matched a file of each submodule. [92]
                 if relocated and ("/" not in tok or tok.startswith(("/", "~"))):
                     continue
                 # The same token comes back from value to value (aliases
@@ -2611,12 +2645,11 @@ class ConfigScan:
         r = _local_remote(url, base)
         if r is not None:
             gd, common, rbase, files = r
-            self.remote_bases.add(rbase)
             for f in files:
                 self.add(f, f)
             for f in (common / "config", gd / "config.worktree"):
                 self.add(f, f)
-                self.nxt.append((f, rbase, False, False))
+                self.nxt.append((f, rbase, False))
             self.add(common / "hooks", common / "hooks", allow_dir=True)
 
     def run(self) -> "ConfigScan":
@@ -2638,33 +2671,26 @@ class ConfigScan:
                 out[n] = "wt"
                 self.structure.add(n)
 
-        # Config files git will read: local, the main repository's (a linked
-        # worktree has no `config` of its own and uses commondir/config), then
-        # system and global — their values also name paths the container can
-        # write (global core.hooksPath, global include.path…).
+        # The repository's config files: local, the main repository's (a
+        # linked worktree has no `config` of its own and uses
+        # commondir/config). Not the system and global files
+        # (global_config_files): git reads them too, but they are the
+        # machine's, not this repository's — what they name (a global
+        # core.hooksPath, an include, a program) is not watched, in the
+        # work tree either. [179]: the global forms of [16] and [68] are a
+        # limitation (DESIGN.md, "Known limitations").
         # Each config file comes with the directory its relative values are
         # resolved against: the root, or the submodule's own tree for the config
         # of `.git/modules/<x>` (hashed by walk_gitdir, but its hooksPath and
         # alias scripts live in the submodule's tree and were never watched). [39]
         # Third element: follow `remote.*.url`. Not for the config of a remote
         # itself — pushing to A does not push to A's remotes.
-        # Fourth element: the file is of global origin (system, global, XDG and
-        # their includes). Git reads those in every repository it enters, so a
-        # relative DIR_KEYS value of theirs (`core.hooksPath = .githooks`) is
-        # resolved again against every other base below — a local remote's gitdir
-        # (receive-pack ran `hub.git/.githooks/pre-receive`), a submodule's tree
-        # (`submodule update` ran `sub/.githooks/post-checkout`) — where it was
-        # resolved against the root only. Values from the environment and `-c`
-        # reach a submodule (prepare_submodule_repo_env keeps
-        # GIT_CONFIG_PARAMETERS) but not a local receive-pack (local_repo_env
-        # clears it), checked on git 2.47 and 2.50. [68]
-        queue = [(f, repo.root, True, False) for f in (repo.gitdir / "config",
-                                                       repo.gitdir / "config.worktree",
-                                                       repo.common / "config",
-                                                       repo.common / "config.worktree")]
-        queue += [(f, repo.root, True, True) for f in global_config_files()]
+        queue = [(f, repo.root, True) for f in (repo.gitdir / "config",
+                                                repo.gitdir / "config.worktree",
+                                                repo.common / "config",
+                                                repo.common / "config.worktree")]
         sub_configs = _submodule_configs(repo)
-        queue += [(f, b, True, False) for f, b in sub_configs]
+        queue += [(f, b, True) for f, b in sub_configs]
         sub_bases = {b for _, b in sub_configs}
         # git-lfs reads the `.lfsconfig` of the repository it runs in: a
         # submodule's during `submodule update` (its smudge filter), a
@@ -2691,14 +2717,12 @@ class ConfigScan:
             for gd, common in borrowed:
                 for f in (common / "config", gd / "config.worktree"):
                     self.add(f, f)
-                    queue.append((f, sub_tree.get(r, repo.root), False, False))
+                    queue.append((f, sub_tree.get(r, repo.root), False))
                 self.add(common / "hooks", common / "hooks", allow_dir=True)
-        # A file is read once per (file, base, origin), not once: one file
-        # included by the superproject's config and a submodule's (a
-        # `~/team.gitconfig`) has its relative values resolved in each; one
-        # included by the local and the global config keeps its global
-        # origin. [93]
-        seen: set[tuple[Path, Path, bool]] = set()
+        # A file is read once per (file, base), not once: one file included
+        # by the superproject's config and a submodule's (a
+        # `~/team.gitconfig`) has its relative values resolved in each. [93]
+        seen: set[tuple[Path, Path]] = set()
 
         # Config git takes from its environment and command line (GIT_CONFIG_*,
         # `-c`): not writable by the sandbox, but its values may name paths in
@@ -2709,15 +2733,14 @@ class ConfigScan:
         # +1: the first round consumes the base files; git then follows
         # INCLUDE_DEPTH levels of includes. With range(INCLUDE_DEPTH) the 10th
         # level was hashed but never parsed. [17]
-        def read(queue: list[tuple[Path, Path, bool, bool]]) -> None:
+        def read(queue: list[tuple[Path, Path, bool]]) -> None:
             for _ in range(INCLUDE_DEPTH + 1):
-                for cf, base, remotes, glob in queue:
-                    if (cf.resolve(), base, glob) in seen or not is_file(cf):
+                for cf, base, remotes in queue:
+                    if (cf.resolve(), base) in seen or not is_file(cf):
                         continue
-                    seen.add((cf.resolve(), base, glob))
+                    seen.add((cf.resolve(), base))
                     for section, key, value in parse_git_config(cf):
-                        self.consider(section, key, value, base, cf.parent, remotes, glob,
-                                      relocated=glob and self.foreign)
+                        self.consider(section, key, value, base, cf.parent, remotes)
                 queue, self.nxt = self.nxt, []
         read(queue)
         # `url.<base>.insteadOf = <prefix>`: git rewrites a remote's URL
@@ -2725,26 +2748,25 @@ class ConfigScan:
         # under a rule of the user's own names `<base>x.git`, a local
         # repository whose hooks a push runs — read as written, a network
         # URL, nothing was watched. Once every rule is known (an include,
-        # the global config, `-c`), each URL is read again as every rule
-        # that matches rewrites it: a superset of git's longest match,
-        # which no tie-break of git's can leave. [151]
+        # `-c`; a rule of the global config is not read), each URL is read
+        # again as every rule that matches rewrites it: a superset of git's
+        # longest match, which no tie-break of git's can leave. [151]
         for url, base in self.urls:
             for to in _rewritten(url, self.rewrites)[1:]:
                 self.local_remote(to, base)
         queue, self.nxt = self.nxt, []
         read(queue)
-        # The global values, resolved where git will resolve them next: in
-        # each local remote (push) and each submodule; the environment's in
-        # the submodules only. [68] Every key, not DIR_KEYS alone: a global
-        # `hook.<n>.command = ./scripts/pc.sh` (git 2.54) runs
-        # `sub/scripts/pc.sh` during `submodule update`. [92] Aliases are
-        # not: git runs one where the user types it, and a git run from a
-        # submodule is checked with that submodule as its root.
-        for base in self.remote_bases - {repo.root}:
-            for section, key, value in self.global_vals:
-                self.consider(section, key, value, base, None, False, relocated=True)
+        # The values of the environment and `-c`, resolved where git will
+        # resolve them next: in each submodule (prepare_submodule_repo_env
+        # keeps GIT_CONFIG_PARAMETERS), not in a local remote (local_repo_env
+        # clears it for receive-pack), checked on git 2.47 and 2.50. [68]
+        # Every key, not DIR_KEYS alone: `-c hook.<n>.command=./scripts/pc.sh`
+        # (git 2.54) runs `sub/scripts/pc.sh` during `submodule update`. [92]
+        # An alias's own definition is not: git runs one where the user
+        # types it, and a git run from a submodule is checked with that
+        # submodule as its root.
         for base in sub_bases - {repo.root}:
-            for section, key, value in [*self.global_vals, *self.env_vals]:
+            for section, key, value in self.env_vals:
                 self.consider(section, key, value, base, None, False, relocated=True)
         self.refs = sorted(((scope, p) for p, scope in out.items()), key=lambda t: str(t[1]))
         return self
@@ -2757,6 +2779,35 @@ def tree_named(scan: "ConfigScan") -> list[Path]:
     gitfiles), which drive discovery and the gitlink barrier rather than
     name something git runs or reads as config."""
     return [p for s, p in scan.refs if s == "wt" and p not in scan.structure]
+
+
+def global_named_in_tree(repo: Repo, settings: GlobalSettings) -> list[str]:
+    """[179] what the system and global config name in this work tree and
+    in its submodules' trees: the part of what the scan no longer reads
+    that a sandbox writes whatever else the user mounts — a relative
+    `core.hooksPath`, an include, a script named by an explicit relative
+    path. For the warning of a trust (warn_accepted_limitations), never
+    for the fingerprint. Read as the scan reads a value of the command in
+    another tree than the root's (`relocated`): a bare word is run from
+    the PATH, and `init.defaultBranch = main` would name a file `main`.
+    An alias in the root's tree only: git runs one where the user types
+    it. Returned as the warning prints them: paths relative to the root,
+    or the setting itself where gitblocker cannot resolve it — a
+    hooksPath that is the root ([59]), a path through a symlink of the
+    tree ([75])."""
+    scan = ConfigScan(repo)
+    bases = [repo.root, *sorted({b for _, b in _submodule_configs(repo)} - {repo.root})]
+    named: set[str] = set()
+    for f, section, key, value in settings:
+        alias = section == "alias" or (section.startswith("alias.") and key == "command")
+        for base in bases[:1] if alias else bases:
+            try:
+                scan.consider(section, key, value, base, f.parent if base == repo.root else None,
+                              False, relocated=True)
+            except Refuse:
+                named.add(f"{section}.{key}={value}")
+    named |= {str(q.relative_to(repo.root)) for q, scope in scan.out.items() if scope == "wt"}
+    return sorted(named)
 
 
 def config_refs(repo: Repo, foreign: bool = False) -> ConfigScan:
@@ -3246,7 +3297,7 @@ def _hard_link(p: Path, st: os.stat_result, link_zones: tuple[Path, ...]) -> Non
     A symlink there is refused; a hard link is a regular file to lstat.
     Only inside the tree, the gitdir and the common dir (`link_zones`): the
     sandbox can only link() what its mount holds, so both names of a link it
-    made lie there. A program the global config names elsewhere may have
+    made lie there. A program the config names elsewhere may have
     other names — Homebrew ships hard-linked binaries, on the same volume
     as $HOME on macOS — and is left alone: nothing the sandbox writes shares
     its inode. A symlink is judged by its target's path (`p` resolved). [88]
@@ -3401,11 +3452,11 @@ def manifest(repo: Repo, refs: list[tuple[str, Path]]) -> dict[tuple[str, str], 
         entries += walk_gitdir(repo.common, "common", zones)
     for scope, p in refs:
         entries += walk_tree(scope, repo.root, p, repo, zones)
-    # The system and global config files are parsed (config_refs) for the
-    # paths they name, never hashed: the sandbox cannot write them, and
-    # whoever can (HOME mounted) can write the state directory too. Hashing
-    # them turned every registered repository "modified" at each
-    # `git config --global` / `git lfs install`. [56]
+    # The system and global config files are neither hashed nor read for
+    # the paths they name: the sandbox cannot write them, and whoever can
+    # (HOME mounted) can write the state directory too. Hashing them turned
+    # every registered repository "modified" at each `git config --global`
+    # / `git lfs install`. [56]
     return {(e.scope, e.path): e for e in entries}
 
 
@@ -4112,7 +4163,7 @@ def cmd_list() -> None:
         err(f"{colors[st](f'{st:<10}')} {date}  {san(label)}")
     if n == 0:
         info(f"no repository registered in {STATE}")
-    check_safe_bare()
+    check_safe_bare(global_settings())
     check_wrap()
 
 
@@ -4187,7 +4238,7 @@ def cmd_retrust() -> None:
             skipped += 1
             warn(f"skipped ({st}): {titled(root, gitdir) if root else key.name}")
     info(f"{n} repository(ies) re-trusted, {skipped} skipped")
-    check_safe_bare()
+    check_safe_bare(global_settings())
     check_wrap()
 
 
@@ -4481,7 +4532,7 @@ def _template_dir_configured(cli: list[str], cli_env: list[str]) -> bool:
     `--template=`, it rules out auto-trust. Every source git reads: the
     global/system config, `-c`/`--config-env`, GIT_CONFIG_COUNT/KEY_n,
     GIT_CONFIG_PARAMETERS — *and the files any of them includes* —
-    GIT_TEMPLATE_DIR. [42] Read through the readers of the scan
+    GIT_TEMPLATE_DIR. [42] Read through the config readers
     (iter_command_config, iter_global_config), not by comparing key
     names here. [150]"""
     if os.environ.get("GIT_TEMPLATE_DIR"):
@@ -4701,6 +4752,25 @@ def _legacy_remote_urls(repo: Repo, name: str) -> list[str]:
     return out
 
 
+def _global_remote_names() -> set[str]:
+    """The remotes the system and global config define (a url or a
+    pushurl), as ConfigScan.remote_names holds the repository's: for git,
+    `push <name>` then goes where that config says, never to
+    `<root>/<name>`. Read by the push check alone — the scan leaves those
+    files out, and what such a remote reaches is not watched ([179])."""
+    return {section[len("remote."):] for _, section, key, _ in iter_global_config()
+            if section.startswith("remote.") and key in ("url", "pushurl")}
+
+
+def _global_rewrites() -> list[tuple[str, str]]:
+    """`url.<base>.insteadOf` / `pushInsteadOf` of the system and global
+    config, as (prefix, base): git applies them to every remote's URL
+    (remote.c alias_url). Read by the auto-accept of a remote alone
+    (auto_accept) — the scan leaves those files out ([179])."""
+    return [(value, section[len("url."):]) for _, section, key, value in iter_global_config()
+            if section.startswith("url.") and key in ("insteadof", "pushinsteadof")]
+
+
 def check_remote_destination(repo: Repo, rest: list[str], scan: "ConfigScan") -> None:
     """`git push <path>` to a local repository that no trusted config names:
     receive-pack runs that repository's hooks and honours its config, and
@@ -4713,12 +4783,17 @@ def check_remote_destination(repo: Repo, rest: list[str], scan: "ConfigScan") ->
     (`git push . main:x`) and a repository a configured remote already
     designates (its config is in `refs`, watched). [62]
     `git archive --remote=<path>` likewise: upload-archive runs in that
-    repository and executes its `tar.<format>.command`. [70]"""
+    repository and executes its `tar.<format>.command`. [70]
+    A name the system or global config makes a remote is one for git too:
+    never the path `<root>/<name>` — a repository of the tree named like
+    it was refused, with the advice to make it a remote. Where that
+    remote leads, and a rule of those files that rewrites a URL of the
+    command line, is not looked at: the machine's ([179])."""
     if not rest or rest[0] not in ("push", "archive"):
         return
     cmd = rest[0]
     dest = (_push_destination if cmd == "push" else _archive_remote)(rest[1:])
-    if dest is None or dest in scan.remote_names:
+    if dest is None or dest in scan.remote_names or dest in _global_remote_names():
         return
     watched = {p for _, p in scan.refs}
     for url, to in ((u, t) for u in _legacy_remote_urls(repo, dest) or [dest]
@@ -4948,7 +5023,7 @@ def run_git(args: list[str], orig: Path, newrepo: NewRepo | None, git: str,
                 if judged is None or not judged.covers(insp.repo):
                     save_trust(insp.repo, insp.refs, insp.new)
                     info(f"new repository trusted: {d}")
-                    warn_accepted_limitations(insp)
+                    warn_accepted_limitations(insp, global_settings())
             except Refuse as e:
                 warn(f"cannot trust {d} automatically: {e}")
     return rc
@@ -5056,6 +5131,7 @@ def auto_accept(repo: Repo, key: Path, old: Manifest, new: dict) -> list[str]:
     ch = changes(old.entries, new)
     out: list[str] = []
     roots: dict[str, set[Path]] = {}
+    rewrites: list[tuple[str, str]] | None = None
     for action, (scope, path) in ch:
         if action != "modified" or scope not in ("local", "common"):
             return []
@@ -5068,9 +5144,26 @@ def auto_accept(repo: Repo, key: Path, old: Manifest, new: dict) -> list[str]:
         old_cfg = Path(str(key) + ".d") / scope / path
         if not old_cfg.is_file():
             return []
-        names = branch_tracking_only(parse_git_config(old_cfg), parse_git_config(cfg))
+        new_items = parse_git_config(cfg)
+        names = branch_tracking_only(parse_git_config(old_cfg), new_items)
         if not names:
             return []
+        added = {n[len("remote "):] for n in names if n.startswith("remote ")}
+        if added:
+            # A network URL as written; git rewrites it before using it
+            # (`url.<base>.insteadOf`, remote.c alias_url). A rule of the
+            # config being judged is the scan's: the mirror it reaches is
+            # an added entry, no change of this kind. A rule of the system
+            # or global config is not ([179]), and "nothing git can run"
+            # must hold for the URL git uses: one such a rule turns into a
+            # local repository is asked about — a mirror directory the
+            # sandbox writes held a hub whose hooks the next push ran.
+            if rewrites is None:
+                rewrites = _global_rewrites()
+            for section, k, value in new_items:
+                if (k == "url" and section.startswith("remote.") and section[len("remote."):] in added
+                        and not all(_network_url(t) for t in _rewritten(value, rewrites))):
+                    return []
         where = "" if cfg.parent == base else f" in {_label(scope, str(cfg.parent.relative_to(base)))}"
         out += [n + where for n in names]
     return out
@@ -6005,7 +6098,7 @@ def cmd_exec_path(args: list[str]) -> None:
     err("  after a git upgrade: gitblocker exec-path again (trust says when)")
 
 
-def warn_accepted_limitations(insp: "Inspection") -> None:
+def warn_accepted_limitations(insp: "Inspection", settings: GlobalSettings | None) -> None:
     """What the trusted state leaves open by design, said where a trust is
     recorded: `trust`, and the auto-trust of a clone or init (run_git) —
     `clone --recurse-submodules` is what writes the pathspec, and its
@@ -6019,7 +6112,25 @@ def warn_accepted_limitations(insp: "Inspection") -> None:
     its child gits, which inherit the judgment — reads the new version.
     [44] [95] And a `submodule.active` pathspec when the fsmonitor pin is
     off (GITBLOCKER_KEEP_FSMONITOR): an in-process entry with no child to
-    judge it and nothing to disarm it. [126]"""
+    judge it and nothing to disarm it. [126]
+
+    The last two warnings are about a setting, whichever file holds it:
+    the system and global config, which the scan leaves out ([179]), come
+    as `settings` (global_settings(): read at a trust, not at every git;
+    None when they could not be read, which was said there). The way out
+    names the file: `git config --unset` does not reach a value of the
+    global config.
+
+    And what those files name in this work tree (global_named_in_tree): git
+    runs or reads it, nothing watches it — the limitation of [179], said
+    here as the others are."""
+    glob = settings or []
+    split_in = list(dict.fromkeys(f for f, section, key, value in glob if _split_index_on(section, key, value)))
+    active_in = [(f, value) for f, section, key, value in glob if (section, key) == ("submodule", "active")]
+
+    def unset(local: bool, files: Iterable[Path], how: str) -> str:
+        return " and ".join(([f"`git config {how}`"] if local else [])
+                            + [f"`git config --file {shlex.quote(str(f))} {how}`" for f in dict.fromkeys(files)])
     intree = tree_named(insp.scan)
     if intree:
         warn(f"files the trusted config names in the work tree "
@@ -6027,19 +6138,28 @@ def warn_accepted_limitations(insp: "Inspection") -> None:
              f"them, a checkout/merge/reset/pull of a commit someone else created replaces "
              f"them after the check, and git uses the new version in the same command. "
              f"Review incoming changes to these files.")
-    if insp.scan.split_index:
-        warn("core.splitIndex = true: the next index git writes is a split index, whose "
-             "gitlinks gitblocker cannot read — every command will be refused until "
-             "`git update-index --no-split-index` then `git config --unset core.splitIndex`.")
-    if insp.scan.active_pathspecs and _env_bool("GITBLOCKER_KEEP_FSMONITOR"):
-        vals = " ".join(sorted(insp.scan.active_pathspecs))
+    named = global_named_in_tree(insp.repo, glob)
+    if named:
+        warn(f"files the global config names in the work tree ({' '.join(named)}): git runs or "
+             f"reads them, and what the global config names is not watched — whoever writes the "
+             f"tree rewrites them unseen. Name them from this repository's config instead (e.g. "
+             f"`git config core.hooksPath .githooks`), where they are watched, or keep what the "
+             f"global config names outside every work tree. [179]")
+    if insp.scan.split_index or split_in:
+        warn(f"core.splitIndex = true: the next index git writes is a split index, whose "
+             f"gitlinks gitblocker cannot read — every command will be refused until "
+             f"`git update-index --no-split-index` then "
+             f"{unset(insp.scan.split_index, split_in, '--unset core.splitIndex')}.")
+    active = set(insp.scan.active_pathspecs) | {value for _, value in active_in}
+    if active and _env_bool("GITBLOCKER_KEEP_FSMONITOR"):
+        vals = " ".join(sorted(active))
+        way = unset(bool(insp.scan.active_pathspecs), (f for f, _ in active_in), "--unset-all submodule.active")
         warn(f"submodule.active = {vals}: every submodule path found in a commit counts "
              f"as active, with nothing written to the config. A repository planted in the "
              f"work tree and named by a commit someone else wrote then runs its "
              f"core.fsmonitor under `git grep --recurse-submodules <rev>`, which "
-             f"GITBLOCKER_KEEP_FSMONITOR lets through. Way out: unset it, or `git config "
-             f"--unset-all submodule.active` (real submodules stay active through their "
-             f"submodule.<name>.url).")
+             f"GITBLOCKER_KEEP_FSMONITOR lets through. Way out: unset it, or {way} (real "
+             f"submodules stay active through their submodule.<name>.url).")
 
 
 def check_wrap() -> None:
@@ -6217,7 +6337,7 @@ def main(argv: list[str]) -> int:
                 if not review(repo, key, old.entries, new, refs,
                               "Record this state as the reference? [y/N] "):
                     raise Refuse("not trusted.")
-                check_safe_bare()
+                check_safe_bare(global_settings())
                 check_wrap()
                 return 0
             rule()
@@ -6230,8 +6350,9 @@ def main(argv: list[str]) -> int:
         wt = [f"{s}:{p}" for s, p in refs]
         if wt:
             hint(f"the config references outside the gitdir: {' '.join(wt)} → watched too")
-        warn_accepted_limitations(insp)
-        check_safe_bare()
+        settings = global_settings()
+        warn_accepted_limitations(insp, settings)
+        check_safe_bare(settings)
         check_wrap()
         return 0
     if mode == "diff":

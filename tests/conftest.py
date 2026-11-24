@@ -43,6 +43,13 @@ def _real_git() -> str:
 
 REAL_GIT = _real_git()
 
+# [179] the scan behind the fingerprint reads the repository's config, not
+# the system and global files: what those name is not watched. The reason of
+# every xfail(strict) that records it — a test that passes again says the
+# global config is read again.
+GLOBAL_NOT_READ = ("[179] accepted limitation (DESIGN.md, Known limitations): the system and "
+                   "global config are not read, what they name is not watched")
+
 
 def _exec_paths(base: Path) -> tuple[Path, Path]:
     """Two exec paths (DESIGN-exec-path.md). The scenarios are built with the
@@ -94,6 +101,17 @@ class Result:
     @property
     def text(self) -> str:
         return self.out + self.err
+
+
+def global_not_read(res: Result) -> None:
+    """[179] the end of a test whose scenario — and whose oracle, where git
+    is asked — says git runs or reads what the system or global config
+    names: gitblocker does not refuse, and the test is reported as the
+    expected failure it records. Called after the assertions that must
+    hold, which a mark on the whole test would let rot. Strict: a refusal
+    here means those files are read again; remove the call."""
+    assert not res.blocked, f"refused: are the system and global config read again? [179]\n{res.text}"
+    pytest.xfail(GLOBAL_NOT_READ)
 
 
 @dataclass

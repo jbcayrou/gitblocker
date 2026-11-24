@@ -10,7 +10,7 @@ from tests.conftest import GB, write_exec
 
 
 def attack_global_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[16] core.hooksPath in ~/.gitconfig pointing into the volume"""
+    """[16] OPEN since [179] — core.hooksPath in ~/.gitconfig pointing into the volume"""
     shared = tmp_path / "vol-hooks"
     write_exec(shared / "pre-commit", "#!/bin/sh\nexit 0\n")
     gb.git("config", "--global", "core.hooksPath", str(shared))
@@ -19,7 +19,7 @@ def attack_global_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
 
 
 def attack_global_include_path(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[16] include.path in ~/.gitconfig to a file in the volume"""
+    """[16] OPEN since [179] — include.path in ~/.gitconfig to a file in the volume"""
     inc = tmp_path / "shared.gitconfig"
     inc.write_text("[core]\n")
     gb.git("config", "--global", "include.path", str(inc))
@@ -427,9 +427,10 @@ def attack_local_remote_relative_hookspath(gb: GB, repo: Path, tmp_path: Path) -
 
 
 def attack_global_relative_hookspath_in_bare_remote(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[68] a global relative core.hooksPath (`.githooks`) applies to a
-    local bare remote too: receive-pack runs `hub.git/.githooks/pre-receive`;
-    gitblocker resolved the global value against the repository's root only"""
+    """[68] OPEN since [179] — a global relative core.hooksPath (`.githooks`)
+    applies to a local bare remote too: receive-pack runs
+    `hub.git/.githooks/pre-receive`; gitblocker resolved the global value
+    against the repository's root only"""
     hub = tmp_path / "vol-hub.git"
     gb.git("init", "-q", "--bare", str(hub))
     gb.git("config", "--global", "core.hooksPath", ".githooks")
@@ -439,8 +440,8 @@ def attack_global_relative_hookspath_in_bare_remote(gb: GB, repo: Path, tmp_path
 
 
 def attack_global_relative_hookspath_in_submodule(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[68] the same global `.githooks` inside a submodule: `git
-    submodule update` checks the submodule out and runs
+    """[68] OPEN since [179] — the same global `.githooks` inside a
+    submodule: `git submodule update` checks the submodule out and runs
     `sub/.githooks/post-checkout`"""
     from tests.attacks._helpers import add_submodule
     gb.git("config", "--global", "core.hooksPath", ".githooks")
@@ -508,45 +509,66 @@ def attack_branch_remote_names_a_path(gb: GB, repo: Path, tmp_path: Path) -> Non
     write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def _program_link(gb: GB, tmp_path: Path, chain: bool = False) -> tuple[Path, Path]:
+def _program_link(gb: GB, repo: Path, tmp_path: Path, chain: bool = False) -> tuple[Path, Path]:
     """gpg.program named through a symlink outside the tree, as Homebrew
-    does; with `chain`, through two links. Returns (link to repoint, target)."""
+    does; with `chain`, through two links. Returns (link to repoint, target).
+    In the repository's own config: the global one is not read ([179])."""
     real = tmp_path / "vol-bin/Cellar/gpg"
     write_exec(real, "#!/bin/sh\nexit 0\n")
     hop = tmp_path / "vol-bin/hop"
     hop.symlink_to(real)
     link = tmp_path / "vol-bin/gpg"
     link.symlink_to(hop if chain else real)
-    gb.git("config", "--global", "gpg.program", str(link))
+    gb.git("config", "gpg.program", str(link), cwd=repo)
     return (hop if chain else link), real
 
 
-def attack_global_program_symlink_repointed(gb: GB, repo: Path, tmp_path: Path) -> None:
+def attack_program_symlink_repointed(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[75] control: the program link outside the tree is watched as a link:
     repointed to a planted script, seen (the canonical path alone kept
     hashing the old target)"""
-    link, _ = _program_link(gb, tmp_path)
+    link, _ = _program_link(gb, repo, tmp_path)
     gb.trust(repo)
     write_exec(tmp_path / "vol-bin/evil", "#!/bin/sh\ntouch /tmp/evil\n")
     link.unlink()
     link.symlink_to(tmp_path / "vol-bin/evil")
 
 
-def attack_global_program_symlink_intermediate_repointed(gb: GB, repo: Path, tmp_path: Path) -> None:
+def attack_program_symlink_intermediate_repointed(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[75] control: an unwatched link between the named link and the
     program, repointed: the named link's hash holds the content it reaches"""
-    hop, _ = _program_link(gb, tmp_path, chain=True)
+    hop, _ = _program_link(gb, repo, tmp_path, chain=True)
     gb.trust(repo)
     write_exec(tmp_path / "vol-bin/evil", "#!/bin/sh\ntouch /tmp/evil\n")
     hop.unlink()
     hop.symlink_to(tmp_path / "vol-bin/evil")
 
 
-def attack_global_program_symlink_target_rewritten(gb: GB, repo: Path, tmp_path: Path) -> None:
+def attack_program_symlink_target_rewritten(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[75] control: the program behind the link rewritten"""
-    _, real = _program_link(gb, tmp_path)
+    _, real = _program_link(gb, repo, tmp_path)
     gb.trust(repo)
     write_exec(real, "#!/bin/sh\ntouch /tmp/evil\n")
+
+
+def attack_global_program_in_the_volume_rewritten(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[75] OPEN since [179] — a program ~/.gitconfig names in the volume
+    (`gpg.program`), rewritten there"""
+    prog = tmp_path / "vol-bin/gpg"
+    write_exec(prog, "#!/bin/sh\nexit 0\n")
+    gb.git("config", "--global", "gpg.program", str(prog))
+    gb.trust(repo)
+    write_exec(prog, "#!/bin/sh\ntouch /tmp/evil\n")
+
+
+def attack_global_remote_names_a_local_hub(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[45] OPEN since [179] — a remote of ~/.gitconfig whose url is a
+    repository of the volume: `git push backup` runs its pre-receive"""
+    hub = tmp_path / "vol-hub.git"
+    gb.git("init", "-q", "--bare", str(hub))
+    gb.git("config", "--global", "remote.backup.url", str(hub))
+    gb.trust(repo)
+    write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
 def attack_alias_script_glued_to_empty_variable(gb: GB, repo: Path, tmp_path: Path) -> None:
@@ -569,10 +591,19 @@ def attack_alias_config_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_global_alias_config_hookspath_quoted(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[80] the same from ~/.gitconfig, quoted and after `-p`"""
+def attack_alias_config_hookspath_quoted(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[80] the same, quoted and after `-p`"""
     write_exec(repo / ".githooks/pre-push", "#!/bin/sh\nexit 0\n")
-    gb.git("config", "--global", "alias.pp", "-p -c 'core.hooksPath=.githooks' push", cwd=repo)
+    gb.git("config", "alias.pp", "-p -c 'core.hooksPath=.githooks' push", cwd=repo)
+    gb.trust(repo)
+    write_exec(repo / ".githooks/pre-push", "#!/bin/sh\ntouch /tmp/evil\n")
+
+
+def attack_global_alias_config_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[80] OPEN since [179] — the same alias in ~/.gitconfig: its `-c` is
+    not read there"""
+    write_exec(repo / ".githooks/pre-push", "#!/bin/sh\nexit 0\n")
+    gb.git("config", "--global", "alias.pp", "-p -c 'core.hooksPath=.githooks' push")
     gb.trust(repo)
     write_exec(repo / ".githooks/pre-push", "#!/bin/sh\ntouch /tmp/evil\n")
 
@@ -630,8 +661,8 @@ def attack_optional_hookspath_local(gb: GB, repo: Path, tmp_path: Path) -> None:
 
 
 def attack_optional_hookspath_global(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[91] the same from ~/.gitconfig, the use case of `:(optional)`:
-    "the repository's .githooks when there is one\""""
+    """[91] OPEN since [179] — the same from ~/.gitconfig, the use case of
+    `:(optional)`: "the repository's .githooks when there is one\""""
     write_exec(repo / ".githooks/post-checkout", OK_HOOK)
     assert gb.git("config", "--global", "core.hooksPath", ":(optional).githooks").rc == 0
     gb.trust(repo)
@@ -639,7 +670,7 @@ def attack_optional_hookspath_global(gb: GB, repo: Path, tmp_path: Path) -> None
 
 
 def attack_global_config_hook_relative_in_submodule(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[92] a global config hook with a relative command
+    """[92] OPEN since [179] — a global config hook with a relative command
     (`hook.conv.command = ./scripts/pc.sh`, git 2.54) runs in every
     repository git enters: `git submodule update` runs `sub/scripts/pc.sh`.
     The [68] re-resolution against each base covers DIR_KEYS only"""
@@ -771,8 +802,9 @@ def _mirror_behind_insteadof(gb: GB, repo: Path, tmp_path: Path, key: str, scope
 
 
 def attack_insteadof_global_reaches_local_hub(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[151] a global `url.<dir>.insteadOf = https://…`: `git push origin`
-    runs the hooks of `<dir>/…`, which the scan read as a network URL"""
+    """[151] OPEN since [179] — a global `url.<dir>.insteadOf = https://…`:
+    `git push origin` runs the hooks of `<dir>/…`, which the scan read as a
+    network URL"""
     _mirror_behind_insteadof(gb, repo, tmp_path, "insteadOf", ["--global"])
 
 
@@ -783,7 +815,23 @@ def attack_insteadof_local_reaches_local_hub(gb: GB, repo: Path, tmp_path: Path)
 
 def attack_pushinsteadof_reaches_local_hub(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[151] `url.<dir>.pushInsteadOf`: the push URL alone is rewritten"""
-    _mirror_behind_insteadof(gb, repo, tmp_path, "pushInsteadOf", ["--global"])
+    _mirror_behind_insteadof(gb, repo, tmp_path, "pushInsteadOf", [])
+
+
+def attack_remote_added_behind_a_global_insteadof(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[179] the user's global `url.<dir>.insteadOf = https://…`, a mirror
+    directory of the volume: the sandbox plants a hub there and adds a
+    remote whose url is a network one as written — auto-accepted ([145]),
+    and the next push ran the hub's pre-receive"""
+    mirrors = tmp_path / "vol-mirrors"
+    mirrors.mkdir()
+    assert gb.git("config", "--global", f"url.{mirrors}/.insteadOf", "https://example.invalid/").rc == 0
+    gb.trust(repo)
+    hub = mirrors / "evil.git"
+    gb.git("init", "-q", "--bare", str(hub))
+    write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
+    assert gb.git("remote", "add", "origin", "https://example.invalid/evil.git", cwd=repo).rc == 0
+    assert gb.git("remote", "get-url", "origin", cwd=repo).out.strip() == str(hub), "git must push to the hub"
 
 
 # [152] a tab or a lone CR between two words of an unquoted value: one

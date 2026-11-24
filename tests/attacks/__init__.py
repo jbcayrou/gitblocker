@@ -1544,6 +1544,51 @@ gitblocker.py refer to this list (how the project reviews itself: DESIGN.md,
      holder's trust. gitdir_apart does not follow a symlink at
      `<tree>/.git`. A reference written before takes its gitdir at the
      first command that finds the repository in its trusted state.
+[179] A decision, not a finding (2026-11-24): the fingerprint is the
+     repository's. The scan reads the config of its gitdirs and of the
+     command (`-c`, GIT_CONFIG_*), no longer the system and global files:
+     what those name — a hooks directory, a template directory, an
+     include, a program, a mirror behind `insteadOf` — is the machine's,
+     the same for every repository, and is not watched, in the work tree
+     either. Gone with
+     it: every registered repository refused at once when a hook of
+     `~/.githooks` or a file `~/.gitconfig` includes was edited (the cost
+     [56] had removed for the file itself), and the global half of [129]
+     (a tree file named `t` under `user.name = t`). Open again, accepted:
+     the global forms of [16] (a global core.hooksPath or include.path
+     naming a path of the volume), [59] (no refusal of a global hooksPath
+     at the root), [68] and [92] (a global relative hooksPath or hook
+     command, in the tree, a submodule, a local remote), [91], [127],
+     [151] (a global insteadOf rule reaching a local mirror, from a
+     remote or from a URL of the command line), [45] (a remote of the
+     global config that is a local repository), [75] and [80] (a program,
+     an alias's `-c` of the global config) — each kept as a record:
+     eleven attacks of the corpus as xfail(strict) (GLOBAL_NOT_READ), the
+     tests whose oracle is git through global_not_read, which asserts it
+     first. All need the user's own global config to name a path the
+     sandbox can write: a relative one (`core.hooksPath = .githooks`) or
+     one inside a mounted directory. The same values in the repository's
+     config, in an include of it or on the command line are read as
+     before. Still read from the global files, outside the scan, by the
+     gates — `init.templateDir` (auto-trust, [42] [150]), the names of
+     the remotes (the push check: `git push docs`, a remote of the global
+     config and a repository `docs` in the tree, was refused as a push to
+     that path), the `insteadOf` rules (the auto-accept of a remote,
+     [145]: a network URL as written that a global rule turns into a hub
+     of the volume passed unasked, and the next push ran its hooks) — and
+     by the warnings: `safe.bareRepository`, and at a trust
+     `core.splitIndex` and `submodule.active`, whose way out names the
+     file, and what those files name in the work tree or a submodule's
+     (a hooks directory, an include, a script by an explicit relative
+     path; no bare word): said at a trust with the way out, never
+     watched. A global config gitblocker cannot parse no longer refuses
+     every command: the warnings say they could not read it, the gates
+     still refuse. A reference written before holds what the global
+     config named — compared, entries `removed` for files still there,
+     `restore` named as a way out and `retrust` skipping the repository:
+     FORMAT_VERSION 5, such a reference is legacy and `retrust`
+     re-validates it. The push check, the auto-accept and the format
+     version come from a review of the first diff of this change.
 """
 from __future__ import annotations
 

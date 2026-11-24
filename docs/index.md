@@ -95,8 +95,8 @@ include.path  includeIf
 alias.ac = !sh tool.sh
 : Any token of a config value that exists as a file in the tree. `core.pager = cat` does not count, since `cat` is not in the tree.
 
-~/.gitconfig  /etc/gitconfig
-: Parsed with the same parser, never with `git config`, which would honour the config being judged. A global `core.hooksPath` into a mounted volume is a complete bypass otherwise.
+git -c core.hooksPath=…
+: What a `-c` or a `GIT_CONFIG_*` variable of the command names, like the repository's own config. Your global config (`~/.gitconfig`, `/etc/gitconfig`) is not read, and what it names is not fingerprinted: it is your machine's, the same for every repository, and a sandbox cannot write it. Keep what it names out of anything you mount, and never make a global `core.hooksPath` relative (see the limits).
 
 </div>
 </div>
@@ -159,7 +159,7 @@ Commit, checkout, merge, rebase, stash, bisect, gc, worktree and submodule opera
 
 What you say yes to is exactly what you were shown. gitblocker saves the state it diffed, never a fresh scan taken after your answer.
 
-**A change to your global config** (`git config --global`, `git lfs install`) marks every registered repository modified at once. `gitblocker retrust` shows that diff once and asks once for all the repositories it is the only change of.
+**A change to your global config** (`git config --global`, `git lfs install`, an edited hook of `~/.githooks`) alerts nowhere: it is your machine's, not part of any repository's fingerprint.
 
 Tried on Debian with the system-wide install, on a repository modified behind the user's back: starship, oh-my-zsh, fish and `__git_ps1` prompts go quiet with no delay; powerlevel10k keeps showing branch and status, since `gitstatusd` reads `.git` itself and never runs git; lazygit exits with gitblocker's message, tig says "Not a git repository"; fugitive's `:Git` shows the refusal after `GITBLOCKER_WAIT`; VS Code's polling waits for your `gitblocker pending`; pre-commit's hook runs with the real git.
 
@@ -250,7 +250,7 @@ When your editor ran git, not you
 | `gitblocker list` | Every registered repository with its status: ok, modified, structure, missing, legacy, unknown. |
 | `gitblocker pending [<repo>… \| -a \| -c]` | Decisions waiting for a git blocked by a program: list them, review one (diff and calling process) and allow or refuse, or clear. |
 | `gitblocker forget <repo>…` | Remove entries. `--missing` removes repositories that no longer exist; `prune` is the same. |
-| `gitblocker retrust` | Re-validate the unchanged repositories in bulk after an upgrade that changed the fingerprint; a change to the global config (`git config --global`, `git lfs install`) is reviewed once for every repository it touches. |
+| `gitblocker retrust` | Re-validate the unchanged repositories in bulk after an upgrade that changed the fingerprint. |
 
 </div>
 <div class="tablewrap" markdown="1">
@@ -279,13 +279,14 @@ When your editor ran git, not you
 - It is no substitute for an up-to-date git. A repository you clone that exploits a bug of git itself acts inside the git you ran, where gitblocker sees nothing.
 - `restore` only cleans the pivot vector. Objects, commits and tree files the sandbox dropped stay there for you to inspect, and so is a watched file outside the repository: restore never writes there.
 - Hooks tracked *in the tree* under `core.hooksPath` (husky, `.githooks`) are watched, but a `checkout`, `merge` or `pull` of a commit the sandbox created rewrites them after the check, and git runs the new version in the same command. This is accepted, not fixed: versioned hooks are a decision to run what the repository contains, like `make` after a pull. `gitblocker trust` warns when that layout is in place; review incoming changes to those files, or keep the hooks outside the tree with a global `core.hooksPath`.
+- Your global config is not read, and what it names is not watched. That holds while it names nothing a sandbox can write. Two layouts break it: a relative global `core.hooksPath` (`.githooks`), with which git runs the hooks of every repository's tree — set it per repository instead (`git config core.hooksPath .githooks`), where it is watched — and a global path inside a directory you mount, such as hooks or an included file kept in a dotfiles checkout a sandbox works on. `gitblocker trust` says so when your global config names files of the repository's own tree.
 - The repositories git enters during a command — a submodule, a repository the sandbox planted in the tree and brought with a commit — are judged by the git that enters them, which is gitblocker when git's exec path is wrapped (`dpkg-divert` on Debian; a `GIT_EXEC_PATH` directory elsewhere; `gitblocker trust` says when it is not). A planted repository is refused there, in the command itself; its gitlink is written and the next command is refused. What the command writes into the repository it was run in is judged at the next command.
 - A trusted hook that calls a program by name depends on your `PATH`. If a `PATH` directory sits in the mounted volume, that is out of reach.
 - The question needs stdout and stderr on a terminal. A prompt's `$(git …)` or a `git log | head` on a changed repository is refused, not asked: rerun without the pipe, or `gitblocker trust`.
 - No desktop notification without a session (ssh, cron, systemd). The pending record is still written and the wait still times out; check `gitblocker pending` by hand.
 - Bare repositories are refused, not managed. `core.splitIndex` is refused: the gitlinks it needs to read live in `sharedindex.*`.
-- Parity with git is checked against git itself in `tests/test_git_parity.py`; a gap found there is marked as an expected failure until fixed, and none is open at the moment. Deliberate, fail-closed divergences: a NUL byte or a line git dies on in a config file is refused.
+- Parity with git is checked against git itself in `tests/test_git_parity.py`; a gap found there is marked as an expected failure until fixed, and none is open at the moment; the expected failures there record what git runs from the global config, which is not read. Deliberate, fail-closed divergences: a NUL byte or a line git dies on in a config file of the repository is refused.
 
-The suite replays a catalogue of over eighty bypasses and false positives found over thirteen adversarial review passes, and requires a refusal for each one while ordinary git workflows stay silent. The catalogue, the review method and the design notes are in the repository.
+The suite replays a catalogue of over eighty bypasses and false positives found over thirteen adversarial review passes, and requires a refusal for each one, the documented limitations aside, while ordinary git workflows stay silent. The catalogue, the review method and the design notes are in the repository.
 
 </section>

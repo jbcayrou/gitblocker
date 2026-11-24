@@ -152,9 +152,9 @@ def attack_hardlink_commit_editmsg_to_ext_hook(gb: GB, repo: Path, tmp_path: Pat
 
 
 def attack_hardlink_commit_editmsg_to_global_hook(gb: GB, repo: Path, tmp_path: Path) -> None:
-    """[127] the same with a global core.hooksPath naming a directory of the
-    volume (the layout of [16]): the prevention layer CLAUDE.md recommends
-    is no help when the directory is on the mount"""
+    """[127] OPEN since [179] — the same with a global core.hooksPath naming
+    a directory of the volume (the layout of [16]): the prevention layer
+    CLAUDE.md recommends is no help when the directory is on the mount"""
     from tests.attacks._helpers import hardlink_editmsg_to_hook, payload
     hook = tmp_path / "vol-hooks/commit-msg"
     write_exec(hook, "#!/bin/sh\nexit 0\n")

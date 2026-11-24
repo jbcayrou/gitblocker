@@ -257,6 +257,25 @@ git 2.50):
 14 s over the real git are those children's interpreter starts, before
 as after ("Child gits" above): about seven per submodule.
 
+## 2026-11-24: the global config is not read ([179])
+
+The scan no longer parses the system and global config files, nor hashes
+what they name (a global hooks directory, an include, an alias's
+script). A/B of the plain check (`ab.py` below, N = 40, macOS, a clone of
+gitblocker, `HOME` set to a directory holding the global config of each
+row):
+
+| the global config                                                      | before  | after   |
+|------------------------------------------------------------------------|---------|---------|
+| two keys (`user.name`, `user.email`)                                   | 52.4 ms | 52.8 ms |
+| 47 keys: 40 shell aliases, a hooks directory of four hooks, an include | 58.1 ms | 53.0 ms |
+
++0.4 ms on a bare global config, the longer script to compile; about
+5 ms less per command on a loaded one, the parse of its values and the
+candidates each alias word was (a `resolve()` per distinct token, [58]).
+The check no longer depends on what `~/.gitconfig` holds; the push
+check and the auto-accept of a remote read it, on those commands only.
+
 ## Where the time goes (2026-10-17 figures)
 
 | component                                             | cost            |

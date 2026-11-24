@@ -10,6 +10,11 @@ Environment assumption: `safe.bareRepository=explicit` in the global config.
 Known divergences are marked `xfail(strict=True)`: the suite stays green, and
 a fix makes the test fail (XPASS) so that the mark gets removed — then the
 end-to-end scenario is moved into tests/attacks/.
+
+What git runs or reads from the system and global config is not a
+divergence but a decision ([179]: those files are not read): the oracle of
+such a test is asserted, then `global_not_read` (conftest) records the
+expected failure and fails if gitblocker refuses again.
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ import pytest
 
 import gitblocker as gb_mod
 from gitblocker import _expand2, global_config_files, index_gitlinks, object_id_size, parse_git_config
-from tests.conftest import GB, write_exec
+from tests.conftest import GB, global_not_read, write_exec
 
 XF = pytest.mark.xfail
 BENIGN = "#!/bin/sh\nexit 0\n"
@@ -258,14 +263,15 @@ def test_prefix_mark_kept_literal_like_git(gb: GB, tmp_path: Path, monkeypatch, 
 
 # ================================================ 3. includes: what git follows
 def test_include_relative_to_global_config(gb: GB, repo: Path) -> None:
-    """Relative include.path in ~/.gitconfig: relative to $HOME for git."""
+    """Relative include.path in ~/.gitconfig: relative to $HOME for git,
+    which reads the included file; the scan reads neither ([179])."""
     home = Path(gb.env["HOME"])
     (home / "inc.cfg").write_text("[core]\n")
     gb.git("config", "--global", "include.path", "inc.cfg")
     gb.trust(repo)
     (home / "inc.cfg").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
     assert gb.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
-    assert gb.check(repo).blocked
+    global_not_read(gb.check(repo))
 
 
 def test_include_nested_relative_to_including_file(gb: GB, repo: Path) -> None:
@@ -1207,7 +1213,9 @@ def test_local_remote_relative_hookspath_where_git_resolves_it(gb: GB, repo: Pat
     """[67] a relative core.hooksPath in the remote's config, [68] in the
     global or system config (git reads them in the remote too): a
     pre-receive is planted under `rel-hooks/` in every gitdir and work tree
-    of the volume, git says which one it runs, rewriting that one is seen."""
+    of the volume, git says which one it runs, rewriting that one is seen —
+    from the remote's config; from the global or system one git runs it
+    all the same and nothing is watched ([179])."""
     url = _remote_layout(gb, tmp_path, layout)
     vol = tmp_path / "vol"
     if source == "remote_config":
@@ -1234,6 +1242,8 @@ def test_local_remote_relative_hookspath_where_git_resolves_it(gb: GB, repo: Pat
     gb.trust(repo)
     write_exec(ran / "pre-receive", EVIL)
     res = gb.check(repo)
+    if source != "remote_config":
+        global_not_read(res)
     assert res.blocked, f"{ran}/pre-receive (run by git push) rewritten, accepted\n{res.text}"
 
 
@@ -1243,7 +1253,8 @@ def test_global_relative_hookspath_in_a_submodule_as_git(gb: GB, repo: Path, tmp
     """[68] a relative core.hooksPath from the global config or from `-c`
     (GIT_CONFIG_PARAMETERS reaches a submodule's git) resolves in the
     submodule's tree: `submodule update --force` runs
-    `sub/.githooks/post-checkout`, git says so, rewriting it is seen."""
+    `sub/.githooks/post-checkout`, git says so, rewriting it is seen —
+    from `-c`; from the global config nothing is watched ([179])."""
     from tests.attacks._helpers import add_submodule
     sub = add_submodule(gb, repo, tmp_path)
     log = tmp_path / "ran.log"
@@ -1259,6 +1270,9 @@ def test_global_relative_hookspath_in_a_submodule_as_git(gb: GB, repo: Path, tmp
     gb.trust(repo)
     write_exec(ran / ".githooks/post-checkout", EVIL)
     r = gb.run("git", *pre, "submodule", "update", "--force", "-q", cwd=repo)
+    if source == "global":
+        assert (Path(gb.env["HOME"]) / "PWNED").exists(), f"git did not run the rewritten hook\n{r.text}"
+        global_not_read(r)
     assert r.blocked, f"{ran}/.githooks/post-checkout rewritten, accepted\n{r.text}"
 
 

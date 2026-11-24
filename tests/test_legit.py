@@ -360,10 +360,11 @@ def test_dir_only_marker_head_file_is_not_a_gitdir(gb: GB, repo: Path) -> None:
     assert not gb.check(repo).blocked
 
 
-def test_safe_directory_global_does_not_watch_siblings(gb: GB, repo: Path, tmp_path: Path) -> None:
+def test_safe_directory_does_not_watch_siblings(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[25] safe.directory to the repository's parent: a directory is not an
-    executed file, it must not enter the fingerprint."""
-    gb.git("config", "--global", "safe.directory", str(tmp_path))
+    executed file, it must not enter the fingerprint. (In the repository's
+    config, which the scan reads; git honours the key from the global one.)"""
+    gb.git("config", "safe.directory", str(tmp_path), cwd=repo)
     r = gb.trust(repo)
     assert "ext:" not in r.out, r.out
     (tmp_path / "sibling").mkdir()
@@ -509,10 +510,10 @@ def test_index_names_close_to_git_rules(gb: GB, repo: Path, name: str) -> None:
 
 
 def test_global_config_change_without_a_path_is_silent(gb: GB, repo: Path) -> None:
-    """[56] The global config is parsed for the paths it names, never hashed:
-    whoever can write ~/.gitconfig can write the state directory, and every
-    `git config --global` / `git lfs install` turned every repository
-    "modified" at once."""
+    """[56] The global config is never hashed — nor read at all since
+    [179]: whoever can write ~/.gitconfig can write the state directory,
+    and every `git config --global` / `git lfs install` turned every
+    repository "modified" at once."""
     for k, v in [("user.email", "x@y"), ("alias.st", "status"),
                  ("filter.lfs.clean", "git-lfs clean -- %f"), ("filter.lfs.smudge", "git-lfs smudge -- %f"),
                  ("filter.lfs.process", "git-lfs filter-process"), ("filter.lfs.required", "true")]:
@@ -539,8 +540,8 @@ def test_data_key_file_rotation_is_silent(gb: GB, repo: Path, tmp_path: Path, ke
     f.write_text("SECRET\n")
     f.chmod(0o600)
     if extra:
-        assert gb.git("config", "--global", *extra).rc == 0
-    assert gb.git("config", "--global", key, str(f)).rc == 0
+        assert gb.git("config", *extra, cwd=repo).rc == 0
+    assert gb.git("config", key, str(f), cwd=repo).rc == 0
     r = gb.trust(repo)
     assert "ext:" not in r.text, r.text
     bak = gb.key_for(repo).with_name(gb.key_for(repo).name + ".d")
@@ -649,7 +650,7 @@ def test_sha256_submodule_with_a_linked_worktree(gb: GB, repo: Path, tmp_path: P
 
 
 # ---------------------------------------- adversarial review of 2026-10-22
-def test_global_program_path_that_is_a_symlink(gb: GB, repo: Path, tmp_path: Path) -> None:
+def test_program_path_that_is_a_symlink(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[75] `gpg.program = /opt/homebrew/bin/gpg` (Homebrew symlinks
     every binary), `core.editor = /usr/bin/vim` (Debian alternatives), a
     stow-managed `~/.gitconfig.local`: add() refuses any config path that is
@@ -659,13 +660,13 @@ def test_global_program_path_that_is_a_symlink(gb: GB, repo: Path, tmp_path: Pat
     link = tmp_path / "opt/bin/gpg"
     link.parent.mkdir(parents=True)
     link.symlink_to(real)
-    gb.git("config", "--global", "gpg.program", str(link))
+    gb.git("config", "gpg.program", str(link), cwd=repo)
     r = gb.run("trust", cwd=repo)
-    assert r.rc == 0, r.text
+    assert r.rc == 0 and str(link) in r.text, r.text
     assert not gb.check(repo).blocked
 
 
-def test_global_program_path_that_is_a_hard_link(gb: GB, repo: Path, tmp_path: Path) -> None:
+def test_program_path_that_is_a_hard_link(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[88] `gpg.program = /opt/homebrew/bin/gpg` where the binary has other
     names (Homebrew's Cellar hard-links some, on the same volume as $HOME
     on macOS), a hard-linked dotfile: the hard-link refusal covers the tree
@@ -679,9 +680,9 @@ def test_global_program_path_that_is_a_hard_link(gb: GB, repo: Path, tmp_path: P
     link.parent.mkdir(parents=True)
     link.symlink_to(real)
     for prog in (real, link):
-        gb.git("config", "--global", "gpg.program", str(prog))
+        gb.git("config", "gpg.program", str(prog), cwd=repo)
         r = gb.run("trust", cwd=repo)
-        assert r.rc == 0, r.text
+        assert r.rc == 0 and str(real) in r.text, r.text
         assert not gb.check(repo).blocked, gb.check(repo).text
 
 
@@ -690,10 +691,9 @@ def test_template_dir_under_the_prefix(gb: GB, repo: Path) -> None:
     value git documents as its default: resolved to the installed
     templates (watched if the user can write there, else nothing), never
     the literal `<root>/%(prefix)/…`; every command silent."""
-    assert gb.git("config", "--global", "init.templateDir",
-                  "%(prefix)/share/git-core/templates").rc == 0
-    r = gb.run("trust", cwd=repo)
-    assert r.rc == 0 and "%(prefix)" not in r.text, r.text
+    assert gb.git("config", "init.templateDir",
+                  "%(prefix)/share/git-core/templates", cwd=repo).rc == 0
+    assert all("%(prefix)" not in line for line in _watched_at_trust(gb, repo))
     assert not gb.run("git", "status", "--short", cwd=repo).blocked
 
 
@@ -733,22 +733,26 @@ def test_linked_worktree_of_a_submodule(gb: GB, repo: Path, tmp_path: Path) -> N
     assert not gb.run("git", "status", cwd=wt).blocked
 
 
-def test_global_relative_hookspath_with_remote_and_submodule_is_quiet(gb: GB, repo: Path,
-                                                                       tmp_path: Path) -> None:
-    """[68] a global `core.hooksPath = .githooks` resolved in a local remote
-    and in a submodule too: with the directories absent, or present and
-    unchanged, nothing is reported."""
+def test_relative_hookspath_of_the_command_with_remote_and_submodule_is_quiet(gb: GB, repo: Path,
+                                                                              tmp_path: Path) -> None:
+    """[68] a `core.hooksPath = .githooks` of the environment (`-c`),
+    resolved in a submodule too: with the directories absent, or present
+    and unchanged, nothing is reported; present, the root's and the
+    submodule's are watched, not the local remote's (git clears the
+    command's config for receive-pack)."""
     from tests.attacks._helpers import add_submodule
     hub = tmp_path / "hub.git"
     gb.git("init", "-q", "--bare", str(hub))
     gb.git("remote", "add", "hub", str(hub), cwd=repo)
     sub = add_submodule(gb, repo, tmp_path)
-    gb.git("config", "--global", "core.hooksPath", ".githooks")
+    gb.env["GIT_CONFIG_PARAMETERS"] = "'core.hooksPath'='.githooks'"
     gb.trust(repo)
     assert not gb.check(repo).blocked
     for d in (repo, hub, sub):
         write_exec(d / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
-    gb.trust(repo)
+    r = gb.trust(repo)
+    assert f"wt:{repo}/.githooks" in r.text and f"wt:{sub}/.githooks" in r.text, r.text
+    assert str(hub / ".githooks") not in r.text, r.text
     assert not gb.check(repo).blocked
     assert not gb.run("git", "status", cwd=repo).blocked
 
@@ -1138,7 +1142,7 @@ def test_tree_file_named_like_a_boolean_or_number_value_is_silent(gb: GB, repo: 
     it stays watched (the generic rule, test_claims.py's PROGRAM_KEYS), and
     so does a boolean key holding a path (core.fsmonitor = ./hook)."""
     assert gb.git("config", "gc.auto", "0", cwd=repo).rc == 0
-    assert gb.git("config", "--global", "commit.gpgSign", "yes", cwd=repo).rc == 0
+    assert gb.git("config", "commit.gpgSign", "yes", cwd=repo).rc == 0
     names = ("true", "false", "0", "yes")
     for n in names:
         (repo / n).write_text("ELF\n")
@@ -1152,15 +1156,26 @@ def test_tree_file_named_like_a_boolean_or_number_value_is_silent(gb: GB, repo: 
     assert any("wt:" in l and l.endswith("hook → watched too") for l in _watched_at_trust(gb, repo))
 
 
-@pytest.mark.xfail(strict=True, reason="[129] accepted limitation (DESIGN.md, Known limitations): "
-                   "a string value's token names a tree file")
-def test_tree_file_named_like_a_string_value_is_silent(gb: GB, repo: Path) -> None:
-    """[129] OPEN — the global config of the suite holds `init.defaultBranch
-    = main` and `user.name = t`: a tree file named `main` or `t` is watched.
-    git reads those keys through git_config_string, the reader of
-    core.editor too, so nothing in its source proves them harmless; a
-    curated list is the fix if a real case comes up (the xfail record)."""
+@pytest.mark.parametrize("scope", [
+    pytest.param("local", marks=pytest.mark.xfail(
+        strict=True, reason="[129] accepted limitation (DESIGN.md, Known limitations): "
+                            "a string value's token names a tree file")),
+    "global"])
+def test_tree_file_named_like_a_string_value_is_silent(gb: GB, repo: Path, scope: str) -> None:
+    """[129] OPEN — the repository's config holds `init.defaultBranch = main`
+    and `user.name = t`: a tree file named `main` or `t` is watched. git
+    reads those keys through git_config_string, the reader of core.editor
+    too, so nothing in its source proves them harmless; a curated list is
+    the fix if a real case comes up (the xfail record). In the global
+    config — where the suite's own, and most users', keep them — they name
+    nothing: that file is not read ([179])."""
     names = ("main", "t")
+    if scope == "local":
+        assert gb.git("config", "init.defaultBranch", "main", cwd=repo).rc == 0
+        assert gb.git("config", "user.name", "t", cwd=repo).rc == 0
+    else:
+        g = gb.git("config", "--global", "--list").out
+        assert "init.defaultbranch=main" in g and "user.name=t" in g, g
     for n in names:
         (repo / n).write_text("ELF\n")
     r = gb.run("trust", cwd=repo)
@@ -1173,19 +1188,18 @@ def test_tree_file_named_like_a_string_value_is_silent(gb: GB, repo: Path) -> No
     assert not r.blocked and "gitblocker:" not in r.err, r.text
 
 
-@pytest.mark.parametrize("scope", ["local", "global", "env"])
+@pytest.mark.parametrize("scope", ["local", "env"])
 def test_config_token_longer_than_name_max_is_no_path(gb: GB, repo: Path, scope: str) -> None:
     """[130] a JWT in `http.<url>.extraHeader` (a token of 300+ bytes, longer
     than NAME_MAX): nothing of that length is a file, so it must not crash
     the scan (Path.exists raised ENAMETOOLONG before Python 3.14) — `trust`
-    must succeed and the next command run. Local, global, and the
-    environment / `-c` (every source config_refs reads)."""
+    must succeed and the next command run. Local and the environment /
+    `-c`: every source config_refs reads."""
     value = "Authorization: Bearer " + "A" * 300
     if scope == "env":
         gb.env["GIT_CONFIG_PARAMETERS"] = f"'http.https://example.com/.extraheader'='{value}'"
     else:
-        args = ["--global"] if scope == "global" else []
-        assert gb.git("config", *args, "http.https://example.com/.extraheader", value, cwd=repo).rc == 0
+        assert gb.git("config", "http.https://example.com/.extraheader", value, cwd=repo).rc == 0
     r = gb.run("trust", cwd=repo)
     assert r.rc == 0 and "internal error" not in r.text, r.text
     r = gb.run("git", "status", "--short", cwd=repo)
@@ -1407,12 +1421,16 @@ def test_split_index_way_out_through_gitblocker(gb: GB, repo: Path) -> None:
     assert not gb.check(repo).blocked
 
 
-def test_insteadof_between_network_urls_is_silent(gb: GB, repo: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize("scope", ["local", "global"])
+def test_insteadof_between_network_urls_is_silent(gb: GB, repo: Path, tmp_path: Path, scope: str) -> None:
     """[151] the everyday `insteadOf` rules, one network URL for another
     (`https://github.com/` → ssh, a `gh:` shorthand): nothing local to
-    watch, no alert, and `remote add` keeps its auto-accept ([145])."""
-    gb.git("config", "--global", "url.git@github.com:.insteadOf", "https://github.com/")
-    gb.git("config", "--global", "url.ssh://git@github.com/.pushInsteadOf", "gh:")
+    watch, no alert, and `remote add` keeps its auto-accept ([145]) —
+    under a rule of the repository's config, which the scan reads, and
+    under one of the global config, which the auto-accept reads ([179])."""
+    where = ["--global"] if scope == "global" else []
+    gb.git("config", *where, "url.git@github.com:.insteadOf", "https://github.com/", cwd=repo)
+    gb.git("config", *where, "url.ssh://git@github.com/.pushInsteadOf", "gh:", cwd=repo)
     gb.git("remote", "add", "origin", "https://github.com/x/y.git", cwd=repo)
     gb.git("remote", "add", "short", "gh:x/y", cwd=repo)
     r = gb.trust(repo)
@@ -1423,16 +1441,44 @@ def test_insteadof_between_network_urls_is_silent(gb: GB, repo: Path, tmp_path: 
     assert r.rc == 0 and "reference updated" in r.err, r.text
 
 
-def test_mirror_behind_insteadof_is_watched_and_usable(gb: GB, repo: Path, tmp_path: Path) -> None:
+def test_what_the_global_config_names_is_no_part_of_the_fingerprint(gb: GB, repo: Path) -> None:
+    """[179] the user's own global setup — a hooks directory, an included
+    file, a program — is the machine's, the same for every repository:
+    nothing of it is watched, and editing it turns no trusted repository
+    suspect. While the scan read the global config, one edited hook of
+    `~/.githooks` refused every registered repository at once."""
+    home = Path(gb.env["HOME"])
+    write_exec(home / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
+    (home / "work.gitconfig").write_text("[core]\n\tabbrev = 12\n")
+    write_exec(home / "bin/pager", "#!/bin/sh\ncat\n")
+    for k, v in (("core.hooksPath", home / ".githooks"), ("include.path", home / "work.gitconfig"),
+                 ("core.pager", home / "bin/pager")):
+        assert gb.git("config", "--global", k, str(v)).rc == 0
+    assert _watched_at_trust(gb, repo) == []
+    assert "the global config names" not in gb.trust(repo).err, "nothing of it is in this tree"
+    write_exec(home / ".githooks/pre-commit", "#!/bin/sh\necho edited\n")
+    (home / "work.gitconfig").write_text("[core]\n\tabbrev = 16\n")
+    write_exec(home / "bin/pager", "#!/bin/sh\ncat -n\n")
+    assert gb.git("config", "--global", "alias.st", "status").rc == 0
+    r = gb.run("git", "status", "--short", cwd=repo)
+    assert r.rc == 0 and "gitblocker:" not in r.err, r.text
+
+
+@pytest.mark.parametrize("scope", ["local", "global"])
+def test_mirror_behind_insteadof_is_watched_and_usable(gb: GB, repo: Path, tmp_path: Path,
+                                                       scope: str) -> None:
     """[151] a local mirror behind `insteadOf`, trusted: push and fetch
     work, and the mirror's own commits do not alert (its config and hooks
-    are watched, not its objects)."""
+    are watched, not its objects). Behind a rule of the global config —
+    where such a rule usually lives — the mirror is as usable and is not
+    watched: that file is not read ([179])."""
     hub = tmp_path / "mirrors/hub.git"
     gb.git("init", "-q", "--bare", str(hub))
-    gb.git("config", "--global", f"url.{tmp_path}/mirrors/.insteadOf", "https://example.invalid/")
+    where = ["--global"] if scope == "global" else []
+    gb.git("config", *where, f"url.{tmp_path}/mirrors/.insteadOf", "https://example.invalid/", cwd=repo)
     gb.git("remote", "add", "origin", "https://example.invalid/hub.git", cwd=repo)
     r = gb.trust(repo)
-    assert str(hub / "config") in r.text, r.text
+    assert (str(hub / "config") in r.text) == (scope == "local"), r.text
     for cmd in (["push", "-q", "origin", "main"], ["fetch", "-q", "origin"], ["status", "--short"]):
         r = gb.run("git", *cmd, cwd=repo)
         assert r.rc == 0, (cmd, r.text)
@@ -1501,15 +1547,12 @@ def test_submodule_is_trusted_with_its_superproject(gb: GB, repo: Path, tmp_path
 def test_submodule_with_its_own_hooks_is_trusted_with_its_superproject(gb: GB, repo: Path,
                                                                      tmp_path: Path) -> None:
     """[154] what the submodule's config names in its tree — a hooks
-    directory, a `.lfsconfig` — and what a global relative `core.hooksPath`
-    names there are hashed by the superproject ([39] [68] [125]): covered."""
+    directory, a `.lfsconfig` — is hashed by the superproject ([39]
+    [125]): covered."""
     sub = add_submodule(gb, repo, tmp_path)
     gb.git("config", "core.hooksPath", ".hk", cwd=sub)
     write_exec(sub / ".hk/pre-push", "#!/bin/sh\nexit 0\n")
     (sub / ".lfsconfig").write_text("[lfs]\n\turl = https://example.invalid/lfs\n")
-    gb.git("config", "--global", "core.hooksPath", ".githooks")
-    for tree in (repo, sub):
-        write_exec(tree / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
     gb.trust(repo)
     _inherits(gb, sub, repo)
 

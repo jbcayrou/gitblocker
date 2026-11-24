@@ -21,7 +21,8 @@ paid for by a bypass.
   never add a "known dangerous keys" list. The closed lists, each entry
   with its proof held to git in `tests/test_claims.py`: the auto-accept
   list in `branch_tracking_only` (branch tracking, VS Code's merge base,
-  a remote with a network URL [145]: keys git cannot execute; read in the
+  a remote with a network URL [145], as the global `insteadOf` rules
+  leave it [179]: keys git cannot execute; read in the
   `config` of a nested gitdir root too [166], applied by a child git too
   [164]),
   `PINNED_CONFIG` (`core.fsmonitor=false`, the one key an in-process
@@ -40,6 +41,20 @@ paid for by a bypass.
   `VALUE_KEYS` is the `[bool]`/`[int]` sections of the inventory, taken
   from git's source, never curated ([129]); a string key stays under the
   generic rule, documented as a cost.
+- **The fingerprint is the repository's.** The scan (`ConfigScan`) reads
+  the config of its gitdirs and of the command (`-c`, `GIT_CONFIG_*`),
+  never the system and global files: what those name is the machine's and
+  is watched nowhere ([179], a decision: one edited hook of `~/.githooks`
+  refused every registered repository). The global forms of [16] [68]
+  [92] [151] are an accepted limitation, kept as xfail records
+  (`GLOBAL_NOT_READ`); do not "fix" them by reading those files again.
+  `iter_global_config` is for a reader of one setting: a gate
+  (`init.templateDir` for auto-trust, the remote names for the push
+  check, the `insteadOf` rules for the auto-accept of a remote) or a
+  warning (`global_settings`: `safe.bareRepository`, the warnings of a
+  trust, among them what those files name in the work tree,
+  `global_named_in_tree`: said, never watched). A reference of the
+  format before is legacy (`FORMAT_VERSION`).
 - **Never run git to learn about a repository.** Discovery, config, gitfile,
   index, todo files: all read by gitblocker's own ports of git's readers
   (`find_root`, `parse_git_config`, `index_gitlinks`, `_read_path_file`…).
@@ -55,7 +70,10 @@ paid for by a bypass.
   them read one file two ways, both readings are watched ([152]), and
   gitblocker never asks git its version.
 - **Fail closed.** Unreadable directory, unparsable config, unknown global
-  option, internal error: refuse, git does not run.
+  option, internal error: refuse, git does not run. A config the check
+  reads: the system and global files are not ([179]) — a gate that reads
+  them (auto-trust, the push check, the auto-accept of a remote) refuses
+  on one it cannot parse, a warning says it could not read it.
 - **The state blessed is the state shown.** `save_trust` receives the
   manifest already computed and displayed; never recompute at the `y`.
   Shown means readable: the diff of every config git reads under a gitdir
@@ -134,7 +152,8 @@ are honoured as git honours them.
 | discovery, gitfile, commondir, `core.worktree` | `find_root`, `is_bare_gitdir`, `open_repo`, `_core_worktree` (section "discovery", `pytest -m discovery` after a git upgrade) | What the script checks, 1–2 |
 | structural refusals (nested `.git`, index names, todo files, symlinks, perms) | `check_structure`, `check_indexes`, `check_volatile_readers`, `VOLATILE_READERS` | What the script checks, 3 |
 | what is hashed in the gitdir | `walk_gitdir`, `_child_root`, `_volatile_*`, `VOLATILE_DIRS`, `VOLATILE_FILES` (paths relative to a gitdir root) | What the fingerprint watches in the gitdir |
-| paths the config makes git read | `ConfigScan` (`add`, `consider`, `run`), `config_refs`, `DIR_KEYS`, `DATA_KEYS`, `global_config_files`, `iter_global_config`, `env_config` | What the fingerprint watches outside the gitdir |
+| paths the config makes git read (the repository's config and the command's; not the system/global files, [179]) | `ConfigScan` (`add`, `consider`, `run`), `config_refs`, `DIR_KEYS`, `DATA_KEYS`, `env_config` | What the fingerprint watches outside the gitdir |
+| one setting of the system/global config: the gates (`init.templateDir`, remote names, `insteadOf` rules) and the warnings (`safe.bareRepository`, those of a trust) | `global_config_files`, `iter_global_config`, `_template_dir_configured`, `_global_remote_names`, `_global_rewrites`, `global_settings`, `check_safe_bare`, `global_named_in_tree`, `warn_accepted_limitations` | same, "Config files parsed" |
 | a repository git borrows objects from (`--reference`, alternates): its config watched, its child covered | `alternate_repos`, `alternate_object_dirs`, `_alternates_entries`, `_borrowed`, `ConfigScan.run`, `Judged.covers` | same, "A repository git borrows objects from"; Nested repositories |
 | the check pipeline (scan → structure → fingerprint) | `inspect`, `Inspection`, `save_trust` | Organization of gitblocker.py |
 | config parser | `_Src`, `_parse_value`, `parse_git_config` | same, "Config files parsed" |
@@ -147,11 +166,11 @@ are honoured as git honours them.
 | child gits: the marker (pid + start + judged gitdir/common/root/label), coverage by `gitdir_roots` and `tree_named`, `new`, the served repository, no detach, the exec-path wrap, its check and its macOS shim | `Judged`, `_ancestors`, `_proc_lineage`, `read_judged`, `set_judged`, `NewRepo`, `_served_repository`, `keep_attached`, `check_wrap`, `cmd_exec_path`, `PATH_QUERIES`, `run_git` | Nested repositories; DESIGN-exec-path.md |
 | performance | PERF.md | Nested repositories (end) |
 | what git writes then reads in one command ([44] [66] [77] [86] [88] [95] [123] [124]); what it reads in-process ([126]) | `Judged.covers`, `_hard_link`, `check_links_into_gitdir`, `PINNED_CONFIG`, `pin_config_env`, `_git_maybe_bool` | The command that writes what it then reads |
-| accepted limitations [44], [71], [74], [126], out-of-scope cases | — | Known limitations |
+| accepted limitations [44], [71], [74], [126], [179], out-of-scope cases | — | Known limitations |
 
 ## Tests
 
-`python3 -m pytest` (~1840 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], the accepted limitations; ~410 s), before
+`python3 -m pytest` (~1850 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], [179], the accepted limitations; ~410 s), before
 any change. pytest is not on the system python: `python3 -m venv <scratch>/venv
 && venv/bin/pip install pytest`.
 
