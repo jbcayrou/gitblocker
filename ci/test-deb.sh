@@ -1,6 +1,6 @@
 #!/bin/sh
 # The life of the package on a machine, replayed against the distribution's
-# own git: install, an upgrade of git, an upgrade of gitguard, remove,
+# own git: install, an upgrade of git, an upgrade of gitwary, remove,
 # purge, the take-over of the README's hand-made install, the removal of
 # git itself. After each: either git is wrapped at both names with the
 # distribution's binaries intact beside them, or the machine is as if the
@@ -9,11 +9,11 @@
 # It installs and removes git, as root: in a throwaway container only.
 #
 #   docker run --rm -v "$PWD":/src:ro debian:13 sh -c \
-#       'cp -r /src /w && cd /w && GITGUARD_DEB_TEST=throwaway ci/test-deb.sh'
+#       'cp -r /src /w && cd /w && GITWARY_DEB_TEST=throwaway ci/test-deb.sh'
 set -eu
-if [ "${GITGUARD_DEB_TEST:-}" != throwaway ] || [ "$(id -u)" != 0 ]; then
+if [ "${GITWARY_DEB_TEST:-}" != throwaway ] || [ "$(id -u)" != 0 ]; then
     echo "ci/test-deb.sh installs and removes git: run it as root in a throwaway" >&2
-    echo "container, with GITGUARD_DEB_TEST=throwaway (see its header)." >&2
+    echo "container, with GITWARY_DEB_TEST=throwaway (see its header)." >&2
     exit 2
 fi
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,12 +24,12 @@ say() { printf '\n== %s\n' "$*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 sum() { sha256sum "$1" | cut -d' ' -f1; }
 apt() { apt-get -qy -o Dpkg::Use-Pty=0 "$@" >/tmp/apt.log 2>&1 || { cat /tmp/apt.log >&2; fail "apt-get $*"; }; }
-diversions() { dpkg-divert --list | grep -c gitguard || true; }
-as_user() { su user -c "cd /home/user && export GITGUARD_STATE=/home/user/state GITGUARD_WAIT=0 GITGUARD_NO_NOTIFY=1 && $1"; }
+diversions() { dpkg-divert --list | grep -c gitwary || true; }
+as_user() { su user -c "cd /home/user && export GITWARY_STATE=/home/user/state GITWARY_WAIT=0 GITWARY_NO_NOTIFY=1 && $1"; }
 
-wrapped() {      # git is gitguard at both names, the distribution's binaries beside them
-    [ "$(readlink $BIN)" = gitguard ] || fail "$BIN is not the package's link"
-    [ "$(readlink -f $CORE)" = /usr/bin/gitguard ] || fail "$CORE does not lead to gitguard"
+wrapped() {      # git is gitwary at both names, the distribution's binaries beside them
+    [ "$(readlink $BIN)" = gitwary ] || fail "$BIN is not the package's link"
+    [ "$(readlink -f $CORE)" = /usr/bin/gitwary ] || fail "$CORE does not lead to gitwary"
     [ "$(sum $BIN.real)" = "$real_bin" ] || fail "$BIN.real is not the distribution's git"
     [ "$(sum $CORE.real)" = "$real_core" ] || fail "$CORE.real is not the distribution's git"
     [ "$(diversions)" = 2 ] || fail "expected two diversions: $(dpkg-divert --list)"
@@ -38,14 +38,14 @@ wrapped() {      # git is gitguard at both names, the distribution's binaries be
     # behind its back refuses the next git, under the dashed name of the
     # exec path too, and `trust` has nothing to say about the exec path.
     rm -rf /home/user/r /home/user/state
-    as_user 'git init -q r' 2>&1 | grep -q 'new repository trusted' || fail "git init did not go through gitguard"
+    as_user 'git init -q r' 2>&1 | grep -q 'new repository trusted' || fail "git init did not go through gitwary"
     as_user 'printf "#!/bin/sh\n" > r/.git/hooks/pre-commit && chmod +x r/.git/hooks/pre-commit'
     for g in git /usr/lib/git-core/git-status; do
         if as_user "cd r && $g status" >/tmp/out 2>&1; then fail "$g ran on a changed repository"; fi
-        grep -q 'has changed since the last trust' /tmp/out || { cat /tmp/out >&2; fail "$g: not gitguard's refusal"; }
+        grep -q 'has changed since the last trust' /tmp/out || { cat /tmp/out >&2; fail "$g: not gitwary's refusal"; }
     done
-    as_user 'cd r && gitguard trust' >/tmp/out 2>&1 || { cat /tmp/out >&2; fail "gitguard trust"; }
-    if grep -q 'does not lead to gitguard\|stale exec path' /tmp/out; then cat /tmp/out >&2; fail "exec path not wrapped"; fi
+    as_user 'cd r && gitwary trust' >/tmp/out 2>&1 || { cat /tmp/out >&2; fail "gitwary trust"; }
+    if grep -q 'does not lead to gitwary\|stale exec path' /tmp/out; then cat /tmp/out >&2; fail "exec path not wrapped"; fi
     as_user 'cd r && git status' >/dev/null 2>&1 || fail "git refused a trusted repository"
 }
 
@@ -55,10 +55,10 @@ pristine() {     # as if the package had never been installed
         [ ! -e $f.real ] && [ ! -L $f.real ] || fail "$f.real left behind"
     done
     [ "$(sum $BIN)" = "$real_bin" ] && [ "$(sum $CORE)" = "$real_core" ] || fail "git is not the distribution's bytes"
-    [ ! -e /usr/bin/gitguard ] || fail "/usr/bin/gitguard left behind"
+    [ ! -e /usr/bin/gitwary ] || fail "/usr/bin/gitwary left behind"
     [ "$(diversions)" = 0 ] || fail "diversion left behind: $(dpkg-divert --list)"
     rm -rf /home/user/r
-    if as_user 'git init -q r' 2>&1 | grep -q gitguard; then fail "git is still gitguard"; fi
+    if as_user 'git init -q r' 2>&1 | grep -q gitwary; then fail "git is still gitwary"; fi
 }
 
 say "the distribution's git"
@@ -69,7 +69,7 @@ id user >/dev/null 2>&1 || useradd -m user
 real_bin=$(sum $BIN) real_core=$(sum $CORE)
 git --version
 deb=$("$here/ci/build-deb.sh" /tmp/deb)
-[ "$(python3 "$here/gitguard.py" version)" = "gitguard $(dpkg-deb -f "$deb" Version)" ] || fail "the package's version is not gitguard's"
+[ "$(python3 "$here/gitwary.py" version)" = "gitwary $(dpkg-deb -f "$deb" Version)" ] || fail "the package's version is not gitwary's"
 next=$(DEB_VERSION=99.0.0 "$here/ci/build-deb.sh" /tmp/deb)
 dpkg-deb --info "$deb" | sed -n 's/^ \(Package\|Version\|Depends\|Maintainer\)/\1/p'
 
@@ -81,37 +81,37 @@ say "git reinstalled by apt (an upgrade of git): dpkg writes at the diverted nam
 apt install --reinstall git
 wrapped
 
-say "upgrade of gitguard: the diversions stay"
+say "upgrade of gitwary: the diversions stay"
 apt install "$next"
-[ "$(dpkg-query -W -f '${Version}' gitguard)" = 99.0.0 ] || fail "not upgraded"
+[ "$(dpkg-query -W -f '${Version}' gitwary)" = 99.0.0 ] || fail "not upgraded"
 wrapped
 
 say "remove"
-apt remove gitguard
+apt remove gitwary
 pristine
 
 say "install, purge"
 apt install "$deb"
 wrapped
-apt purge gitguard
+apt purge gitwary
 pristine
 
 say "the README's hand-made install, taken over by the package, then removed"
-dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/bin/gitguard > /usr/bin/gitguard
-chmod 755 /usr/bin/gitguard
-dpkg-divert --package gitguard --add --rename --divert $BIN.real $BIN >/dev/null
-ln -s gitguard $BIN
-dpkg-divert --package gitguard --add --rename --divert $CORE.real $CORE >/dev/null
-ln -s /usr/bin/gitguard $CORE
+dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/bin/gitwary > /usr/bin/gitwary
+chmod 755 /usr/bin/gitwary
+dpkg-divert --package gitwary --add --rename --divert $BIN.real $BIN >/dev/null
+ln -s gitwary $BIN
+dpkg-divert --package gitwary --add --rename --divert $CORE.real $CORE >/dev/null
+ln -s /usr/bin/gitwary $CORE
 apt install "$deb"
 wrapped
-apt remove gitguard
+apt remove gitwary
 pristine
 
-say "git removed while gitguard is installed: both go, nothing is left"
+say "git removed while gitwary is installed: both go, nothing is left"
 apt install "$deb"
 apt remove git
-for f in $BIN $BIN.real $CORE $CORE.real /usr/bin/gitguard; do
+for f in $BIN $BIN.real $CORE $CORE.real /usr/bin/gitwary; do
     [ ! -e $f ] && [ ! -L $f ] || fail "$f left behind"
 done
 [ "$(diversions)" = 0 ] || fail "diversion left behind: $(dpkg-divert --list)"

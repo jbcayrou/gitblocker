@@ -3,12 +3,12 @@
 
     python3 tests/inventory.py <git source tree>  >  tests/inventory/git-<ver>.txt
 
-gitguard's closed lists (VOLATILE_*, DIR_KEYS, DATA_KEYS, GLOBAL_FLAGS…) are
+gitwary's closed lists (VOLATILE_*, DIR_KEYS, DATA_KEYS, GLOBAL_FLAGS…) are
 claims about git. The bypass catalogue grew one case at a time because the
 universe those lists live in was never written down; git's source names it
 under a handful of signatures. This script extracts them; test_claims.py
-holds gitguard's lists to the latest snapshot in tests/inventory/, so that
-an item git knows and gitguard has not classified fails there, before a
+holds gitwary's lists to the latest snapshot in tests/inventory/, so that
+an item git knows and gitwary has not classified fails there, before a
 review finds it. On a git upgrade: regenerate, diff the two snapshots,
 classify what is new.
 
@@ -24,7 +24,7 @@ Sections (one item per line, `# ` comments, blank lines ignored):
               / git_parse_maybe_bool / git_config_bool_or_int /
               *_config_get_(maybe_)bool: a value that is a boolean, never a
               path — a tree file named `true` or `false` is nothing git runs
-              from it ([129]; gitguard's VALUE_KEYS is exactly this list and
+              from it ([129]; gitwary's VALUE_KEYS is exactly this list and
               [int]). Keys of a wildcard section compared on their last part
               only (`skip_prefix(var, "remote.")` then `strcmp(subkey,
               ".prune")`) are not seen: they keep the generic rule, a file

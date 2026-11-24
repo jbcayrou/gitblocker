@@ -1,9 +1,9 @@
-"""gitguard <-> git consistency: what gitguard reads must be what git reads.
+"""gitwary <-> git consistency: what gitwary reads must be what git reads.
 
-Every divergence where git honours a value gitguard does not see is a
+Every divergence where git honours a value gitwary does not see is a
 detection bug. The tests take **git as the oracle** (`git config -f
 --list -z`, `--type=path`, `rev-parse`, `ls-files -s`, `--show-origin`) and
-check the inclusion "everything git sees, gitguard sees".
+check the inclusion "everything git sees, gitwary sees".
 
 Environment assumption: `safe.bareRepository=explicit` in the global config.
 
@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-import gitguard as gg_mod
-from gitguard import _expand2, global_config_files, index_gitlinks, object_id_size, parse_git_config
-from tests.conftest import GG, write_exec
+import gitwary as gw_mod
+from gitwary import _expand2, global_config_files, index_gitlinks, object_id_size, parse_git_config
+from tests.conftest import GW, write_exec
 
 XF = pytest.mark.xfail
 BENIGN = "#!/bin/sh\nexit 0\n"
@@ -43,7 +43,7 @@ def _git_list(p: Path) -> list[tuple[str, str]] | None:
     return out
 
 
-def _gg_list(p: Path) -> list[tuple[str, str]]:
+def _gw_list(p: Path) -> list[tuple[str, str]]:
     return [(f"{s}.{k}", v) for s, k, v in parse_git_config(p)]
 
 
@@ -90,7 +90,7 @@ PARSER_OK = [
     ("trailing_space_then_comment", b"[core]\n\thooksPath = .githooks   # c\n"),
     ("quoted_then_space", b'[core]\n\thooksPath = "a b"  \n'),
     # [152] a tab or a lone CR between two words, unquoted: a space for
-    # git < 2.45, kept since. Both are entries of gitguard's list.
+    # git < 2.45, kept since. Both are entries of gitwary's list.
     ("tab_between_words", b"[core]\n\thooksPath = my\thooks\n"),
     ("tabs_and_spaces_between_words", b"[core]\n\thooksPath = a \t\t b\tc\n"),
     ("tab_after_continuation", b"[alias]\n\tlg = log \\\n\t\t--graph\n"),
@@ -101,9 +101,9 @@ PARSER_OK = [
     ("two_keys_with_tabs", b"[core]\n\thooksPath = a\tb\n\tpager = c\td\n"),
 ]
 
-# Files git rejects (fatal: bad config line): gitguard's tolerance is harmless
+# Files git rejects (fatal: bad config line): gitwary's tolerance is harmless
 # as long as git rejects. If a git version accepts them, this test fails: one
-# must then check that gitguard reads the same thing.
+# must then check that gitwary reads the same thing.
 GIT_REJECTS = [
     ("key_then_comment", b"[core]\n\tbare # c\n"),
     ("spaces_in_brackets", b"[ core ]\n\thooksPath = .githooks\n"),
@@ -119,9 +119,9 @@ def _assert_parser_covers_git(tmp_path: Path, data: bytes) -> None:
     p.write_bytes(data)
     want = _git_list(p)
     assert want is not None, "git rejects this file: move the case to GIT_REJECTS"
-    got = _gg_list(p)
+    got = _gw_list(p)
     missing = [kv for kv in want if kv not in got]
-    assert not missing, f"git reads {missing}, gitguard reads {got}"
+    assert not missing, f"git reads {missing}, gitwary reads {got}"
 
 
 @pytest.mark.parametrize("data", [c[1] for c in PARSER_OK], ids=[c[0] for c in PARSER_OK])
@@ -144,12 +144,12 @@ def test_parser_reading_is_this_gits_exactly(tmp_path: Path, data: bytes) -> Non
 
 
 def test_parser_nul_refused(tmp_path: Path) -> None:
-    """git truncates a value at a NUL byte (C string); gitguard refuses the
+    """git truncates a value at a NUL byte (C string); gitwary refuses the
     file instead of guessing — see test_nul_in_config_fails_closed."""
     p = tmp_path / "cfg"
     p.write_bytes(b"[core]\n\thooksPath = .githooks\x00junk\n")
     assert _git_list(p) == [("core.hookspath", ".githooks")]
-    with pytest.raises(gg_mod.Refuse):
+    with pytest.raises(gw_mod.Refuse):
         parse_git_config(p)
 
 
@@ -159,7 +159,7 @@ def test_parser_refuses_what_git_rejects(tmp_path: Path, data: bytes) -> None:
     read differently)."""
     p = tmp_path / "cfg"
     p.write_bytes(data)
-    with pytest.raises(gg_mod.Refuse):
+    with pytest.raises(gw_mod.Refuse):
         parse_git_config(p)
 
 
@@ -167,24 +167,24 @@ def test_parser_refuses_what_git_rejects(tmp_path: Path, data: bytes) -> None:
 def test_git_still_rejects(tmp_path: Path, data: bytes) -> None:
     p = tmp_path / "cfg"
     p.write_bytes(data)
-    assert _git_list(p) is None, "git now accepts this file: compare with gitguard"
+    assert _git_list(p) is None, "git now accepts this file: compare with gitwary"
 
 
-# ---- end to end: git honours core.hooksPath ⇒ gitguard watches .githooks
-def _hookspath_e2e(gg: GG, repo: Path, edit) -> None:
+# ---- end to end: git honours core.hooksPath ⇒ gitwary watches .githooks
+def _hookspath_e2e(gw: GW, repo: Path, edit) -> None:
     write_exec(repo / ".githooks/pre-commit", BENIGN)
     cfg = repo / ".git/config"
     cfg.write_bytes(edit(cfg.read_bytes()))
-    r = gg.git("config", "--get", "core.hookspath", cwd=repo)
+    r = gw.git("config", "--get", "core.hookspath", cwd=repo)
     assert r.out.strip() == ".githooks", f"precondition: git must honour hooksPath\n{r.text}"
-    gg.trust(repo)
+    gw.trust(repo)
     write_exec(repo / ".githooks/pre-commit", EVIL)
-    r = gg.check(repo)
+    r = gw.check(repo)
     assert r.blocked, f"rewritten hook accepted although git will execute it\n{r.text}"
 
 
 E2E_PARSER = [
-    # the BOM must precede the section carrying the key: gitguard loses that section
+    # the BOM must precede the section carrying the key: gitwary loses that section
     ("utf8_bom", lambda b: b"\xef\xbb\xbf[core]\n\thooksPath = .githooks\n" + b),
     ("comment_line_backslash", lambda b: b + b"[core]\n# husky \\\n\thooksPath = .githooks\n"),
     ("inline_comment_backslash", lambda b: b + b"[core]\n\tpager = less # x \\\n\thooksPath = .githooks\n"),
@@ -192,27 +192,27 @@ E2E_PARSER = [
 ]
 
 
-def test_hookspath_e2e_control(gg: GG, repo: Path) -> None:
+def test_hookspath_e2e_control(gw: GW, repo: Path) -> None:
     """Control: the ordinary form is detected (the harness can succeed)."""
-    _hookspath_e2e(gg, repo, lambda b: b + b"[core]\n\thooksPath = .githooks\n")
+    _hookspath_e2e(gw, repo, lambda b: b + b"[core]\n\thooksPath = .githooks\n")
 
 
 @pytest.mark.parametrize("edit", [c[1] for c in E2E_PARSER], ids=[c[0] for c in E2E_PARSER])
-def test_hookspath_e2e_parser_cases(gg: GG, repo: Path, edit) -> None:
-    """Formerly divergent [46]: git honours the hooksPath, so must gitguard."""
-    _hookspath_e2e(gg, repo, edit)
+def test_hookspath_e2e_parser_cases(gw: GW, repo: Path, edit) -> None:
+    """Formerly divergent [46]: git honours the hooksPath, so must gitwary."""
+    _hookspath_e2e(gw, repo, edit)
 
 
-def test_nul_in_config_fails_closed(gg: GG, repo: Path) -> None:
-    """NUL in a value: git truncates, gitguard keeps the byte — but lstat()
+def test_nul_in_config_fails_closed(gw: GW, repo: Path) -> None:
+    """NUL in a value: git truncates, gitwary keeps the byte — but lstat()
     raises ValueError, hence an internal error and a (closed) refusal, at
     trust as at check time. Keep it closed if the parser gets fixed."""
     write_exec(repo / ".githooks/pre-commit", BENIGN)
     cfg = repo / ".git/config"
     cfg.write_bytes(cfg.read_bytes() + b"[core]\n\thooksPath = .githooks\x00\n")
-    assert gg.git("config", "--get", "core.hookspath", cwd=repo).out.strip() == ".githooks"
-    assert gg.run("trust", cwd=repo).blocked
-    assert gg.check(repo).blocked
+    assert gw.git("config", "--get", "core.hookspath", cwd=repo).out.strip() == ".githooks"
+    assert gw.run("trust", cwd=repo).blocked
+    assert gw.check(repo).blocked
 
 
 # ================================================ 2. path expansion vs git
@@ -235,9 +235,9 @@ def _git_path(tmp_path: Path, value: str, env: dict) -> str | None:
     pytest.param("%(prefix)//x", id="prefix_absolute_rest"),
     pytest.param("%(prefix)/~/x", id="prefix_then_tilde"),
 ])
-def test_path_expansion_matches_git(gg: GG, tmp_path: Path, monkeypatch, value: str) -> None:
-    monkeypatch.setenv("HOME", gg.env["HOME"])
-    want = _git_path(tmp_path, value, gg.env)
+def test_path_expansion_matches_git(gw: GW, tmp_path: Path, monkeypatch, value: str) -> None:
+    monkeypatch.setenv("HOME", gw.env["HOME"])
+    want = _git_path(tmp_path, value, gw.env)
     assert want is not None and os.path.isabs(want)
     literal, _ = _expand2(value, tmp_path / "root", pathname=True)
     assert str(literal) == want
@@ -245,11 +245,11 @@ def test_path_expansion_matches_git(gg: GG, tmp_path: Path, monkeypatch, value: 
 
 @pytest.mark.parametrize("value", ["./%(prefix)/x", "%(prefix)x", "%(Prefix)/x", "~/%(prefix)/x",
                                    "%(prefix)"])
-def test_prefix_mark_kept_literal_like_git(gg: GG, tmp_path: Path, monkeypatch, value: str) -> None:
-    """[128] what git does not interpolate, gitguard does not either: the
+def test_prefix_mark_kept_literal_like_git(gw: GW, tmp_path: Path, monkeypatch, value: str) -> None:
+    """[128] what git does not interpolate, gitwary does not either: the
     literal, relative to the base (git: as written)."""
-    monkeypatch.setenv("HOME", gg.env["HOME"])
-    want = _git_path(tmp_path, value, gg.env)
+    monkeypatch.setenv("HOME", gw.env["HOME"])
+    want = _git_path(tmp_path, value, gw.env)
     assert want is not None
     literal, _ = _expand2(value, tmp_path / "root", pathname=True)
     expanded = os.path.expanduser(value) if value.startswith("~") else value
@@ -257,48 +257,48 @@ def test_prefix_mark_kept_literal_like_git(gg: GG, tmp_path: Path, monkeypatch, 
 
 
 # ================================================ 3. includes: what git follows
-def test_include_relative_to_global_config(gg: GG, repo: Path) -> None:
+def test_include_relative_to_global_config(gw: GW, repo: Path) -> None:
     """Relative include.path in ~/.gitconfig: relative to $HOME for git."""
-    home = Path(gg.env["HOME"])
+    home = Path(gw.env["HOME"])
     (home / "inc.cfg").write_text("[core]\n")
-    gg.git("config", "--global", "include.path", "inc.cfg")
-    gg.trust(repo)
+    gw.git("config", "--global", "include.path", "inc.cfg")
+    gw.trust(repo)
     (home / "inc.cfg").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
-    assert gg.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
-    assert gg.check(repo).blocked
+    assert gw.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
+    assert gw.check(repo).blocked
 
 
-def test_include_nested_relative_to_including_file(gg: GG, repo: Path) -> None:
+def test_include_nested_relative_to_including_file(gw: GW, repo: Path) -> None:
     """An include inside an included file is relative to THAT file's directory."""
     (repo / "cfg").mkdir()
     (repo / "cfg/a.cfg").write_text("[include]\n\tpath = b.cfg\n")
     (repo / "cfg/b.cfg").write_text("[core]\n")
-    gg.git("config", "include.path", "../cfg/a.cfg", cwd=repo)
-    gg.trust(repo)
+    gw.git("config", "include.path", "../cfg/a.cfg", cwd=repo)
+    gw.trust(repo)
     (repo / "cfg/b.cfg").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
-    assert gg.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
-    assert gg.check(repo).blocked
+    assert gw.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
+    assert gw.check(repo).blocked
 
 
-def test_include_missing_then_created(gg: GG, repo: Path) -> None:
+def test_include_missing_then_created(gw: GW, repo: Path) -> None:
     """include.path to an optional file absent at trust time, created afterwards."""
-    gg.git("config", "include.path", "../local.cfg", cwd=repo)
-    gg.trust(repo)
+    gw.git("config", "include.path", "../local.cfg", cwd=repo)
+    gw.trust(repo)
     (repo / "local.cfg").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
-    assert gg.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
-    assert gg.check(repo).blocked
+    assert gw.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
+    assert gw.check(repo).blocked
 
 
 @pytest.mark.parametrize("cond", ["onbranch:main", "gitdir:/", "gitdir/i:/",
                                   "hasconfig:remote.*.url:**"])
-def test_includeif_any_condition_followed(gg: GG, repo: Path, cond: str) -> None:
-    gg.git("remote", "add", "origin", "https://example.invalid/x", cwd=repo)
+def test_includeif_any_condition_followed(gw: GW, repo: Path, cond: str) -> None:
+    gw.git("remote", "add", "origin", "https://example.invalid/x", cwd=repo)
     (repo / "if.cfg").write_text("[core]\n")
-    gg.git("config", f"includeIf.{cond}.path", "../if.cfg", cwd=repo)
-    gg.trust(repo)
+    gw.git("config", f"includeIf.{cond}.path", "../if.cfg", cwd=repo)
+    gw.trust(repo)
     (repo / "if.cfg").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
-    assert gg.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
-    assert gg.check(repo).blocked
+    assert gw.git("config", "--get", "core.fsmonitor", cwd=repo).out.strip() == "/tmp/evil"
+    assert gw.check(repo).blocked
 
 
 # ======================= 4. value tokens vs what sh actually executes
@@ -313,21 +313,21 @@ SHELL_OK = ["./tool.sh", "sh tool.sh", "sh -c ./tool.sh", '"./tool.sh"',
             "T=./tool.sh; $T"]
 
 
-def _alias_e2e(gg: GG, repo: Path, cmd: str) -> None:
-    mark = Path(gg.env["HOME"]) / "RAN"
+def _alias_e2e(gw: GW, repo: Path, cmd: str) -> None:
+    mark = Path(gw.env["HOME"]) / "RAN"
     write_exec(repo / "tool.sh", f"#!/bin/sh\ntouch '{mark}'\n")
     esc = ("!" + cmd).replace("\\", "\\\\").replace('"', '\\"')
     cfg = repo / ".git/config"
     cfg.write_text(cfg.read_text() + f'[alias]\n\tt = "{esc}"\n')
-    gg.git("t", cwd=repo)
+    gw.git("t", cwd=repo)
     assert mark.exists(), "precondition: git does execute tool.sh through this alias"
-    gg.trust(repo)
+    gw.trust(repo)
     write_exec(repo / "tool.sh", EVIL)
-    r = gg.check(repo)
+    r = gw.check(repo)
     assert r.blocked, f"rewritten tool.sh accepted although `git t` executes it\n{r.text}"
 
 
-# sh expansions expandvars does not perform: git (sh) runs tool.sh, gitguard
+# sh expansions expandvars does not perform: git (sh) runs tool.sh, gitwary
 # saw no path. [58]
 SHELL_EXPANSIONS = ["${TOOL:-./tool.sh}", "${TOOL-./tool.sh}", "${PWD:+./tool.sh}",
               '"${TOOL:-./tool.sh}"', "$(pwd)/tool.sh", "`pwd`/tool.sh",
@@ -340,62 +340,62 @@ SHELL_EXPANSIONS = ["${TOOL:-./tool.sh}", "${TOOL-./tool.sh}", "${PWD:+./tool.sh
 
 
 @pytest.mark.parametrize("cmd", SHELL_OK + SHELL_EXPANSIONS)
-def test_alias_script_watched(gg: GG, repo: Path, cmd: str) -> None:
-    _alias_e2e(gg, repo, cmd)
+def test_alias_script_watched(gw: GW, repo: Path, cmd: str) -> None:
+    _alias_e2e(gw, repo, cmd)
 
 
 # ====================================== 5. repository discovery vs git rev-parse
-def _git_view(gg: GG, cwd: Path) -> tuple[Path, Path] | None:
-    r = gg.git("rev-parse", "--show-toplevel", "--absolute-git-dir", cwd=cwd)
+def _git_view(gw: GW, cwd: Path) -> tuple[Path, Path] | None:
+    r = gw.git("rev-parse", "--show-toplevel", "--absolute-git-dir", cwd=cwd)
     if r.rc:
         return None
     top, gd = r.out.splitlines()
     return Path(top).resolve(), Path(gd).resolve()
 
 
-def _gg_view(cwd: Path, monkeypatch) -> tuple[Path, Path] | None:
-    """(root, gitdir) chosen by gitguard; None if it refuses."""
+def _gw_view(cwd: Path, monkeypatch) -> tuple[Path, Path] | None:
+    """(root, gitdir) chosen by gitwary; None if it refuses."""
     monkeypatch.delenv("GIT_DIR", raising=False)
     try:
-        root = gg_mod.find_root(cwd)
+        root = gw_mod.find_root(cwd)
         if root is None:
             return None
-        repo = gg_mod.open_repo(root)
-    except gg_mod.Refuse:
+        repo = gw_mod.open_repo(root)
+    except gw_mod.Refuse:
         return None
     return repo.root, repo.gitdir
 
 
-def _assert_same_repo(gg: GG, cwd: Path, monkeypatch) -> None:
-    want = _git_view(gg, cwd)
-    got = _gg_view(cwd, monkeypatch)
+def _assert_same_repo(gw: GW, cwd: Path, monkeypatch) -> None:
+    want = _git_view(gw, cwd)
+    got = _gw_view(cwd, monkeypatch)
     if got is None:
-        return                       # gitguard refuses: safe whatever git does
-    assert want is not None and got == want, f"git uses {want}, gitguard checks {got}"
+        return                       # gitwary refuses: safe whatever git does
+    assert want is not None and got == want, f"git uses {want}, gitwary checks {got}"
 
 
 @pytest.fixture
-def explicit(gg: GG) -> GG:
-    assert gg.git("config", "--global", "safe.bareRepository", "explicit").rc == 0
-    return gg
+def explicit(gw: GW) -> GW:
+    assert gw.git("config", "--global", "safe.bareRepository", "explicit").rc == 0
+    return gw
 
 
 @pytest.mark.discovery
-def test_discovery_subdir(explicit: GG, repo: Path, monkeypatch) -> None:
+def test_discovery_subdir(explicit: GW, repo: Path, monkeypatch) -> None:
     (repo / "a/b").mkdir(parents=True)
     _assert_same_repo(explicit, repo / "a/b", monkeypatch)
 
 
 @pytest.mark.discovery
-def test_discovery_linked_worktree(explicit: GG, repo: Path, tmp_path: Path, monkeypatch) -> None:
+def test_discovery_linked_worktree(explicit: GW, repo: Path, tmp_path: Path, monkeypatch) -> None:
     assert explicit.git("worktree", "add", "-q", str(tmp_path / "wt"), cwd=repo).rc == 0
     _assert_same_repo(explicit, tmp_path / "wt", monkeypatch)
 
 
 @pytest.mark.discovery
-def test_discovery_invalid_dotgit_dir_skipped_by_git(explicit: GG, repo: Path, monkeypatch) -> None:
+def test_discovery_invalid_dotgit_dir_skipped_by_git(explicit: GW, repo: Path, monkeypatch) -> None:
     """[49] `.git` directory invalid for git (no HEAD/objects/refs): git
-    ignores it and walks up to the parent; gitguard stopped on it."""
+    ignores it and walks up to the parent; gitwary stopped on it."""
     (repo / "src/.git").mkdir(parents=True)
     (repo / "src/.git/config").write_text("[core]\n")
     _assert_same_repo(explicit, repo / "src", monkeypatch)
@@ -404,7 +404,7 @@ def test_discovery_invalid_dotgit_dir_skipped_by_git(explicit: GG, repo: Path, m
 @pytest.mark.parametrize("layout", ["head_symlink", "commondir", "commondir_nul", "head_sha",
                                     "head_ref_tab"])
 @pytest.mark.discovery
-def test_discovery_gitdir_variants_match_git(explicit: GG, repo: Path, tmp_path: Path,
+def test_discovery_gitdir_variants_match_git(explicit: GW, repo: Path, tmp_path: Path,
                                              monkeypatch, layout: str) -> None:
     """[49] is_git_directory as git has it: HEAD may be a symlink to refs/…,
     a detached SHA, `ref:<tab>refs/…`; objects/refs may live behind `commondir`."""
@@ -430,7 +430,7 @@ def test_discovery_gitdir_variants_match_git(explicit: GG, repo: Path, tmp_path:
 # [53] Files git reads as ONE path: the gitfile (`gitdir: <path>`) and
 # `commondir`. git trims every trailing CR/LF and nothing else; a blank, a lone
 # CR or a second line are part of the path, git finds no repository and dies.
-# gitguard read them with splitlines()/strip() and a lexical resolve(): it
+# gitwary read them with splitlines()/strip() and a lexical resolve(): it
 # checked a repository git never opens. Strict here: same verdict both ways.
 PATH_FILE_VARIANTS = [
     ("plain", b"{p}\n", True), ("crlf", b"{p}\r\n", True), ("no_newline", b"{p}", True),
@@ -441,16 +441,16 @@ PATH_FILE_VARIANTS = [
 ]
 
 
-def _same_verdict(gg: GG, cwd: Path, monkeypatch, git_accepts: bool) -> None:
-    want, got = _git_view(gg, cwd), _gg_view(cwd, monkeypatch)
+def _same_verdict(gw: GW, cwd: Path, monkeypatch, git_accepts: bool) -> None:
+    want, got = _git_view(gw, cwd), _gw_view(cwd, monkeypatch)
     assert (want is not None) == git_accepts, f"git's own behaviour changed: {want}"
-    assert got == want, f"git uses {want}, gitguard checks {got}"
+    assert got == want, f"git uses {want}, gitwary checks {got}"
 
 
 @pytest.mark.parametrize("fmt,git_accepts", [c[1:] for c in PATH_FILE_VARIANTS],
                          ids=[c[0] for c in PATH_FILE_VARIANTS])
 @pytest.mark.discovery
-def test_gitfile_read_like_git(explicit: GG, repo: Path, tmp_path: Path, monkeypatch,
+def test_gitfile_read_like_git(explicit: GW, repo: Path, tmp_path: Path, monkeypatch,
                                fmt: bytes, git_accepts: bool) -> None:
     wt = tmp_path / "wt"
     assert explicit.git("worktree", "add", "-q", str(wt), cwd=repo).rc == 0
@@ -462,7 +462,7 @@ def test_gitfile_read_like_git(explicit: GG, repo: Path, tmp_path: Path, monkeyp
 @pytest.mark.parametrize("fmt,git_accepts", [c[1:] for c in PATH_FILE_VARIANTS],
                          ids=[c[0] for c in PATH_FILE_VARIANTS])
 @pytest.mark.discovery
-def test_commondir_read_like_git(explicit: GG, repo: Path, tmp_path: Path, monkeypatch,
+def test_commondir_read_like_git(explicit: GW, repo: Path, tmp_path: Path, monkeypatch,
                                  fmt: bytes, git_accepts: bool) -> None:
     wt = tmp_path / "wt"
     assert explicit.git("worktree", "add", "-q", str(wt), cwd=repo).rc == 0
@@ -472,7 +472,7 @@ def test_commondir_read_like_git(explicit: GG, repo: Path, tmp_path: Path, monke
 
 # ============================================ rebase todo: `exec` as git reads it
 # (name, bytes prepended to git-rebase-todo, does git run the line). The rule
-# is one-way: whenever git runs it, gitguard must refuse; a refusal where git
+# is one-way: whenever git runs it, gitwary must refuse; a refusal where git
 # does nothing is a false positive we accept (fail closed). git's own column is
 # asserted too, so that a git version changing what it runs is seen here.
 # Checked with git 2.47.3 (Debian) and 2.50.0 (Homebrew). [35] [53]
@@ -494,26 +494,26 @@ TODO_EXEC_VARIANTS = [
 
 @pytest.mark.parametrize("fmt,git_runs", [c[1:] for c in TODO_EXEC_VARIANTS],
                          ids=[c[0] for c in TODO_EXEC_VARIANTS])
-def test_todo_exec_seen_whenever_git_runs_it(gg: GG, repo: Path, tmp_path: Path,
+def test_todo_exec_seen_whenever_git_runs_it(gw: GW, repo: Path, tmp_path: Path,
                                              fmt: bytes, git_runs: bool) -> None:
     from tests.attacks.tool_itself import _interrupted_rebase
-    todo = _interrupted_rebase(gg, repo, tmp_path)
-    gg.trust(repo)
-    marker = Path(gg.env["HOME"]) / "PWNED"
+    todo = _interrupted_rebase(gw, repo, tmp_path)
+    gw.trust(repo)
+    marker = Path(gw.env["HOME"]) / "PWNED"
     cmd = f'touch "{marker}"'.encode()
     todo.write_bytes(fmt.replace(b"{c}", cmd) + todo.read_bytes())
-    refused = gg.check(repo).blocked              # before git consumes the todo
+    refused = gw.check(repo).blocked              # before git consumes the todo
     subprocess.run(["git", "rebase", "--continue"], cwd=repo, capture_output=True,
-                   env={**gg.env, "GIT_EDITOR": "true"})
+                   env={**gw.env, "GIT_EDITOR": "true"})
     ran = marker.exists()
     assert ran == git_runs, f"git's own behaviour changed: ran={ran}"
     if ran:
-        assert refused, "git ran the exec line and gitguard had let it through"
+        assert refused, "git ran the exec line and gitwary had let it through"
 
 
 @pytest.mark.parametrize("layout", ["commondir", "head_symlink_unborn", "full_bare"])
 @pytest.mark.discovery
-def test_planted_gitdir_refused_by_git_with_explicit(explicit: GG, repo: Path, layout: str) -> None:
+def test_planted_gitdir_refused_by_git_with_explicit(explicit: GW, repo: Path, layout: str) -> None:
     """Bare-gitdir variants that is_bare_gitdir does not recognise (commondir,
     dangling HEAD symlink): the safe.bareRepository=explicit assumption must
     make git itself refuse. If this test breaks, find_root must learn them."""
@@ -534,7 +534,7 @@ def test_planted_gitdir_refused_by_git_with_explicit(explicit: GG, repo: Path, l
 
 
 @pytest.mark.discovery
-def test_core_worktree_hookspath(explicit: GG, repo: Path, tmp_path: Path) -> None:
+def test_core_worktree_hookspath(explicit: GW, repo: Path, tmp_path: Path) -> None:
     """[47] core.worktree in .git/config: git takes that directory as the root
     and resolves a relative core.hooksPath there."""
     other = tmp_path / "other"
@@ -549,7 +549,7 @@ def test_core_worktree_hookspath(explicit: GG, repo: Path, tmp_path: Path) -> No
 
 @pytest.mark.parametrize("where", ["common", "common_with_extension", "config_worktree"])
 @pytest.mark.discovery
-def test_core_worktree_in_a_linked_worktree_as_git(explicit: GG, repo: Path, tmp_path: Path,
+def test_core_worktree_in_a_linked_worktree_as_git(explicit: GW, repo: Path, tmp_path: Path,
                                                    where: str) -> None:
     """[76] check_repository_format_gently applies core.worktree only `if
     (!has_common)`: never in a linked worktree — unless
@@ -567,12 +567,12 @@ def test_core_worktree_in_a_linked_worktree_as_git(explicit: GG, repo: Path, tmp
         explicit.git("config", "core.worktree", str(other), cwd=repo)
     top = Path(explicit.git("rev-parse", "--show-toplevel", cwd=wt).out.strip()).resolve()
     assert top == (wt if where == "common" else other).resolve(), where
-    assert gg_mod.open_repo(wt).root.resolve() == top
+    assert gw_mod.open_repo(wt).root.resolve() == top
     assert explicit.run("trust", cwd=wt).rc == 0
 
 
-def _git_toplevel_with_git_dir(gg: GG, gitdir: Path, cwd: Path) -> Path | None:
-    env = dict(gg.env, GIT_DIR=str(gitdir))
+def _git_toplevel_with_git_dir(gw: GW, gitdir: Path, cwd: Path) -> Path | None:
+    env = dict(gw.env, GIT_DIR=str(gitdir))
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, env=env,
                        capture_output=True, text=True)
     return Path(r.stdout.strip()).resolve() if r.returncode == 0 else None
@@ -580,7 +580,7 @@ def _git_toplevel_with_git_dir(gg: GG, gitdir: Path, cwd: Path) -> Path | None:
 
 @pytest.mark.parametrize("where", ["two_values", "config_worktree"])
 @pytest.mark.discovery
-def test_git_dir_core_worktree_as_git(explicit: GG, repo: Path, tmp_path: Path, monkeypatch,
+def test_git_dir_core_worktree_as_git(explicit: GW, repo: Path, tmp_path: Path, monkeypatch,
                                       where: str) -> None:
     """[84] With GIT_DIR, git reads core.worktree as check_repo_format does:
     the last value wins, and with extensions.worktreeConfig the gitdir's
@@ -598,17 +598,17 @@ def test_git_dir_core_worktree_as_git(explicit: GG, repo: Path, tmp_path: Path, 
     want = _git_toplevel_with_git_dir(explicit, repo / ".git", tmp_path)
     assert want == b.resolve(), f"git's own behaviour changed: {want}"
     monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
-    assert gg_mod.find_root(tmp_path) == want
+    assert gw_mod.find_root(tmp_path) == want
 
 
 @pytest.mark.parametrize("how", ["discovered", "git_dir"])
 @pytest.mark.parametrize("value", ["~/t", f"~{getpass.getuser()}/t", "$HOME/t"])
 @pytest.mark.discovery
-def test_core_worktree_not_interpolated_as_git(explicit: GG, repo: Path, tmp_path: Path,
+def test_core_worktree_not_interpolated_as_git(explicit: GW, repo: Path, tmp_path: Path,
                                                monkeypatch, value: str, how: str) -> None:
     """[84] git copies core.worktree as is (check_repo_format: xstrdup, no
-    `~` or variable expansion) and dies on `chdir '~/t'`. gitguard expanded
-    it and checked `$HOME/t` — a tree git never opens. Git dies ⇒ gitguard
+    `~` or variable expansion) and dies on `chdir '~/t'`. gitwary expanded
+    it and checked `$HOME/t` — a tree git never opens. Git dies ⇒ gitwary
     refuses, never a Repo on the expanded path."""
     home_t = Path(explicit.env["HOME"]) / "t"
     home_t.mkdir()
@@ -616,19 +616,19 @@ def test_core_worktree_not_interpolated_as_git(explicit: GG, repo: Path, tmp_pat
     if how == "git_dir":
         want = _git_toplevel_with_git_dir(explicit, repo / ".git", tmp_path)
         monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
-        run = lambda: gg_mod.find_root(tmp_path)
+        run = lambda: gw_mod.find_root(tmp_path)
     else:
         want = _git_view(explicit, repo)
-        run = lambda: gg_mod.open_repo(repo).root
+        run = lambda: gw_mod.open_repo(repo).root
     assert want is None, f"git's own behaviour changed: {want}"
-    with pytest.raises(gg_mod.Refuse):
+    with pytest.raises(gw_mod.Refuse):
         got = run()
         assert got != home_t.resolve(), got      # for the message; raises anyway
 
 
 # ========================================= 6. index gitlinks vs ls-files -s
-def _git_gitlinks(gg: GG, repo: Path) -> list[str]:
-    r = subprocess.run(["git", "ls-files", "-s", "-z"], cwd=repo, env=gg.env, capture_output=True)
+def _git_gitlinks(gw: GW, repo: Path) -> list[str]:
+    r = subprocess.run(["git", "ls-files", "-s", "-z"], cwd=repo, env=gw.env, capture_output=True)
     out = []
     for rec in r.stdout.split(b"\0"):
         if rec.startswith(b"160000 "):
@@ -639,27 +639,27 @@ def _git_gitlinks(gg: GG, repo: Path) -> list[str]:
 @pytest.mark.parametrize("fmt", ["sha1", "sha256"])
 @pytest.mark.parametrize("skiphash", [False, True], ids=["hash", "skipHash"])
 @pytest.mark.parametrize("version", [2, 3, 4])
-def test_index_gitlinks_match_ls_files(gg: GG, repo: Path, tmp_path: Path, version: int,
+def test_index_gitlinks_match_ls_files(gw: GW, repo: Path, tmp_path: Path, version: int,
                                        skiphash: bool, fmt: str) -> None:
     """…in both object formats: the entries of a SHA-256 index hold 32-byte
     ids, the parser assumed 20 and refused every one as forged. [63]"""
     if fmt == "sha256":
         repo = tmp_path / "s256"
-        assert gg.git("init", "-q", "--object-format=sha256", str(repo)).rc == 0
+        assert gw.git("init", "-q", "--object-format=sha256", str(repo)).rc == 0
         (repo / "f").write_text("a\n")
-        gg.git("add", "f", cwd=repo)
-        assert gg.git("commit", "-qm", "i", cwd=repo).rc == 0
-    sha = gg.git("rev-parse", "HEAD", cwd=repo).out.strip()
+        gw.git("add", "f", cwd=repo)
+        assert gw.git("commit", "-qm", "i", cwd=repo).rc == 0
+    sha = gw.git("rev-parse", "HEAD", cwd=repo).out.strip()
     long = "/".join(["d" * 200] * 25) + "/sub"          # > 0xFFF: saturated name length
     paths = ["vendor/a", "vendor/ab", "node_modules/pkg", "é space/x", long, "z"]
     (repo / "ita").write_text("x\n")
     pre = ["-c", "index.skipHash=true"] if skiphash else []
-    assert gg.git(*pre, "add", "-N", "ita", cwd=repo).rc == 0       # extended entry (v3+)
+    assert gw.git(*pre, "add", "-N", "ita", cwd=repo).rc == 0       # extended entry (v3+)
     for p in paths:
-        r = gg.git(*pre, "update-index", "--add", "--cacheinfo", f"160000,{sha},{p}", cwd=repo)
+        r = gw.git(*pre, "update-index", "--add", "--cacheinfo", f"160000,{sha},{p}", cwd=repo)
         assert r.rc == 0, r.text
-    assert gg.git(*pre, "update-index", "--index-version", str(version), cwd=repo).rc == 0
-    want = _git_gitlinks(gg, repo)
+    assert gw.git(*pre, "update-index", "--index-version", str(version), cwd=repo).rc == 0
+    want = _git_gitlinks(gw, repo)
     assert len(want) == len(paths)
     assert sorted(index_gitlinks(repo / ".git/index", None, object_id_size(repo / ".git"))) == want
 
@@ -702,19 +702,19 @@ OBJECT_FORMAT_VARIANTS = {
 
 
 @pytest.mark.parametrize("name", OBJECT_FORMAT_VARIANTS)
-def test_object_format_as_git_reads_it(gg: GG, tmp_path: Path, name: str) -> None:
-    from gitguard import Refuse
+def test_object_format_as_git_reads_it(gw: GW, tmp_path: Path, name: str) -> None:
+    from gitwary import Refuse
     r = tmp_path / "s256"
-    assert gg.git("init", "-q", "--object-format=sha256", str(r)).rc == 0
+    assert gw.git("init", "-q", "--object-format=sha256", str(r)).rc == 0
     (r / ".git/inc").write_text("[extensions]\n\tobjectformat = sha256\n")
     (r / ".git/config").write_text(OBJECT_FORMAT_VARIANTS[name])
-    oracle = gg.git("rev-parse", "--show-object-format", cwd=r)
+    oracle = gw.git("rev-parse", "--show-object-format", cwd=r)
     try:
         got = object_id_size(r / ".git")
     except Refuse:
         got = None
     if oracle.rc:
-        assert got is None, f"git refuses the repository ({oracle.err.strip()}), gitguard reads {got}"
+        assert got is None, f"git refuses the repository ({oracle.err.strip()}), gitwary reads {got}"
     else:
         assert got == {"sha1": 20, "sha256": 32}[oracle.out.strip()], (oracle.out, got)
 
@@ -731,9 +731,9 @@ def _git_origins(env: dict, cwd: Path) -> set[Path]:
 
 
 @pytest.mark.parametrize("variant", ["default", "xdg", "git_config_global", "git_config_system"])
-def test_global_config_files_cover_git(gg: GG, tmp_path: Path, monkeypatch, variant: str) -> None:
-    home = Path(gg.env["HOME"])
-    env = dict(gg.env)
+def test_global_config_files_cover_git(gw: GW, tmp_path: Path, monkeypatch, variant: str) -> None:
+    home = Path(gw.env["HOME"])
+    env = dict(gw.env)
     (home / ".config/git").mkdir(parents=True)
     (home / ".config/git/config").write_text("[a]\n\tb = 1\n")
     if variant == "xdg":
@@ -754,18 +754,18 @@ def test_global_config_files_cover_git(gg: GG, tmp_path: Path, monkeypatch, vari
     want = _git_origins(env, tmp_path)
     assert want, "git reads no file: broken harness"
     got = {p.resolve() for p in global_config_files()}
-    assert want <= got, f"git reads {want - got}, which gitguard does not parse"
+    assert want <= got, f"git reads {want - got}, which gitwary does not parse"
 
 
 @pytest.mark.parametrize("nosystem", ["1", "true", "2", "0", "off"])
-def test_global_config_files_honour_nosystem(gg: GG, tmp_path: Path, monkeypatch, nosystem: str) -> None:
+def test_global_config_files_honour_nosystem(gw: GW, tmp_path: Path, monkeypatch, nosystem: str) -> None:
     """[133] under GIT_CONFIG_NOSYSTEM (a git_env_bool: `1`, `true`, `2`;
     `0`, `off` are unset) git reads no system config, whatever
-    GIT_CONFIG_SYSTEM names. gitguard reads exactly the system files git
+    GIT_CONFIG_SYSTEM names. gitwary reads exactly the system files git
     reads: one too many
     brought tokens git never sees (a system `filter.lfs.required = true`
     and a tree file named `true`, [129]). The oracle is git's own origins."""
-    env = dict(gg.env)
+    env = dict(gw.env)
     sysf = tmp_path / "s.cfg"
     sysf.write_text("[a]\n\te = 1\n")
     env["GIT_CONFIG_SYSTEM"] = str(sysf)
@@ -774,17 +774,17 @@ def test_global_config_files_honour_nosystem(gg: GG, tmp_path: Path, monkeypatch
         monkeypatch.setenv(k, v)
     want = _git_origins(env, tmp_path)
     got = {p.resolve() for p in global_config_files()}
-    assert want <= got, f"git reads {want - got}, which gitguard does not parse"
+    assert want <= got, f"git reads {want - got}, which gitwary does not parse"
     assert (sysf.resolve() in want) == (sysf.resolve() in got), (want, got)
 
 
 def test_system_config_of_real_git_is_read(tmp_path: Path, monkeypatch) -> None:
-    """The system config git actually uses must be among the files gitguard
+    """The system config git actually uses must be among the files gitwary
     parses (Debian: /etc/gitconfig; Homebrew: /opt/homebrew/etc/gitconfig,
     derived from the git binary's prefix without asking git)."""
     monkeypatch.delenv("GIT_CONFIG_SYSTEM", raising=False)
-    monkeypatch.delenv("GITGUARD_REAL_GIT", raising=False)
-    real = gg_mod.real_git()
+    monkeypatch.delenv("GITWARY_REAL_GIT", raising=False)
+    real = gw_mod.real_git()
     env = {k: v for k, v in os.environ.items()
            if k not in ("GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM")}
     env["GIT_EDITOR"] = "echo"
@@ -793,59 +793,59 @@ def test_system_config_of_real_git_is_read(tmp_path: Path, monkeypatch) -> None:
     assert r.returncode == 0, r.stderr
     want = Path(r.stdout.strip()).resolve()
     got = {p.resolve() for p in global_config_files()}
-    assert want in got, f"git uses {want}, gitguard reads {sorted(map(str, got))}"
+    assert want in got, f"git uses {want}, gitwary reads {sorted(map(str, got))}"
 
 
 @pytest.mark.parametrize("how", ["count", "parameters", "parameters_old", "dash_c"])
-def test_env_config_hookspath(gg: GG, repo: Path, how: str) -> None:
+def test_env_config_hookspath(gw: GW, repo: Path, how: str) -> None:
     """[48] GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS (both
     syntaxes) and `-c`: git honours them, so does config_refs."""
     if how == "count":
-        gg.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath",
+        gw.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath",
                       GIT_CONFIG_VALUE_0=".githooks")
     elif how == "parameters":
-        gg.env["GIT_CONFIG_PARAMETERS"] = "'user.x'='a b' 'core.hooksPath'='.githooks'"
+        gw.env["GIT_CONFIG_PARAMETERS"] = "'user.x'='a b' 'core.hooksPath'='.githooks'"
     elif how == "parameters_old":
-        gg.env["GIT_CONFIG_PARAMETERS"] = "'core.hooksPath=.githooks'"
+        gw.env["GIT_CONFIG_PARAMETERS"] = "'core.hooksPath=.githooks'"
     else:
         write_exec(repo / ".githooks/pre-commit", BENIGN)
-        gg.trust(repo)
+        gw.trust(repo)
         write_exec(repo / ".githooks/pre-commit", EVIL)
-        r = gg.run("git", "-c", "core.hooksPath=.githooks", "status", cwd=repo)
+        r = gw.run("git", "-c", "core.hooksPath=.githooks", "status", cwd=repo)
         assert r.blocked and "On branch" not in r.out, r.text
-        r = gg.run("git", "status", cwd=repo)
+        r = gw.run("git", "status", cwd=repo)
         assert not r.blocked, r.text        # without -c the hook is not git's
         return
     write_exec(repo / ".githooks/pre-commit", BENIGN)
-    assert gg.git("config", "--get", "core.hookspath", cwd=repo).out.strip() == ".githooks"
-    gg.trust(repo)
+    assert gw.git("config", "--get", "core.hookspath", cwd=repo).out.strip() == ".githooks"
+    gw.trust(repo)
     write_exec(repo / ".githooks/pre-commit", EVIL)
-    assert gg.check(repo).blocked
+    assert gw.check(repo).blocked
 
 
 # ------------------------------------------------- discovery: where git stops
-def _with_env(gg: GG, **extra: str) -> GG:
-    return GG(env={**gg.env, **extra}, state=gg.state)
+def _with_env(gw: GW, **extra: str) -> GW:
+    return GW(env={**gw.env, **extra}, state=gw.state)
 
 
 @pytest.mark.discovery
-def test_ceiling_directories_stop_gitguard_where_git_stops(gg: GG, repo: Path) -> None:
+def test_ceiling_directories_stop_gitwary_where_git_stops(gw: GW, repo: Path) -> None:
     """GIT_CEILING_DIRECTORIES=<repo>: from <repo>/sub git does not enter <repo>
-    and finds nothing. gitguard used to walk up anyway, check the repository
+    and finds nothing. gitwary used to walk up anyway, check the repository
     git would not open, and refuse on it."""
     sub = repo / "sub"
     sub.mkdir()
     write_exec(repo / ".git/hooks/pre-commit")               # modified: a refusal if checked
-    assert gg.check(repo).blocked
-    g = _with_env(gg, GIT_CEILING_DIRECTORIES=str(repo))
+    assert gw.check(repo).blocked
+    g = _with_env(gw, GIT_CEILING_DIRECTORIES=str(repo))
     oracle = g.git("rev-parse", "--show-toplevel", cwd=sub)
     assert oracle.rc != 0 and "not a git repository" in oracle.err
     r = g.run("git", "rev-parse", "--show-toplevel", cwd=sub)
-    assert "gitguard" not in r.err, r.err
+    assert "gitwary" not in r.err, r.err
     assert r.rc == oracle.rc and "not a git repository" in r.err
     assert g.run(cwd=sub).rc == 0 and not g.run(cwd=sub).blocked      # plain check: nothing here
     # the ceiling itself is not entered, but the cwd always is
-    g2 = _with_env(gg, GIT_CEILING_DIRECTORIES=str(repo.parent))
+    g2 = _with_env(gw, GIT_CEILING_DIRECTORIES=str(repo.parent))
     assert g2.git("rev-parse", "--show-toplevel", cwd=sub).rc == 0
     assert g2.run("git", "rev-parse", "--show-toplevel", cwd=sub).blocked      # found, modified: refused
     assert g2.git("rev-parse", "--show-toplevel", cwd=repo).rc == 0
@@ -853,32 +853,32 @@ def test_ceiling_directories_stop_gitguard_where_git_stops(gg: GG, repo: Path) -
 
 
 @pytest.mark.discovery
-def test_ceiling_entries_are_resolved_unless_after_an_empty_one(gg: GG, repo: Path, tmp_path: Path) -> None:
+def test_ceiling_entries_are_resolved_unless_after_an_empty_one(gw: GW, repo: Path, tmp_path: Path) -> None:
     sub = repo / "sub"
     sub.mkdir()
     link = tmp_path / "link-to-repo"
     os.symlink(repo, link)
     write_exec(repo / ".git/hooks/pre-commit")
-    g = _with_env(gg, GIT_CEILING_DIRECTORIES=str(link))               # resolved → the repo: a ceiling
+    g = _with_env(gw, GIT_CEILING_DIRECTORIES=str(link))               # resolved → the repo: a ceiling
     assert g.git("rev-parse", cwd=sub).rc != 0
-    assert not g.run("git", "rev-parse", cwd=sub).err.count("gitguard")
-    g = _with_env(gg, GIT_CEILING_DIRECTORIES=os.pathsep + str(link))  # literal → no ancestor: no ceiling
+    assert not g.run("git", "rev-parse", cwd=sub).err.count("gitwary")
+    g = _with_env(gw, GIT_CEILING_DIRECTORIES=os.pathsep + str(link))  # literal → no ancestor: no ceiling
     assert g.git("rev-parse", cwd=sub).rc == 0
     assert g.run("git", "rev-parse", cwd=sub).blocked
 
 
 
 # ================= 8. repository-local environment variables vs git [54]
-def _git_common_dir(gg: GG, cwd: Path) -> Path | None:
-    r = gg.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=cwd)
+def _git_common_dir(gw: GW, cwd: Path) -> Path | None:
+    r = gw.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=cwd)
     return None if r.rc else Path(r.out.strip()).resolve()
 
 
-def _gg_common_dir(cwd: Path) -> Path | None:
+def _gw_common_dir(cwd: Path) -> Path | None:
     try:
-        root = gg_mod.find_root(cwd)
-        return None if root is None else gg_mod.open_repo(root).common.resolve()
-    except gg_mod.Refuse:
+        root = gw_mod.find_root(cwd)
+        return None if root is None else gw_mod.open_repo(root).common.resolve()
+    except gw_mod.Refuse:
         return None
 
 
@@ -893,10 +893,10 @@ def _other_gitdir(repo: Path, tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("where", ["root", "subdir", "linked_worktree"])
 @pytest.mark.discovery
-def test_env_common_dir_is_the_common_dir(explicit: GG, repo: Path, tmp_path: Path,
+def test_env_common_dir_is_the_common_dir(explicit: GW, repo: Path, tmp_path: Path,
                                           monkeypatch, where: str) -> None:
     """GIT_COMMON_DIR (absolute): git reads config and hooks there, in a
-    linked worktree too (its `commondir` file is ignored). gitguard must
+    linked worktree too (its `commondir` file is ignored). gitwary must
     parse and fingerprint that directory, not the gitdir's own files."""
     other = _other_gitdir(repo, tmp_path)
     if where == "linked_worktree":
@@ -908,9 +908,9 @@ def test_env_common_dir_is_the_common_dir(explicit: GG, repo: Path, tmp_path: Pa
     explicit.env["GIT_COMMON_DIR"] = str(other)
     monkeypatch.setenv("GIT_COMMON_DIR", str(other))
     assert explicit.git("config", "x.marker", cwd=cwd).out.strip() == "other"   # oracle
-    want, got = _git_common_dir(explicit, cwd), _gg_common_dir(cwd)
-    assert want == other.resolve() and got == want, f"git uses {want}, gitguard {got}"
-    # And the config git honours is the one gitguard parses: a hooksPath
+    want, got = _git_common_dir(explicit, cwd), _gw_common_dir(cwd)
+    assert want == other.resolve() and got == want, f"git uses {want}, gitwary {got}"
+    # And the config git honours is the one gitwary parses: a hooksPath
     # written there into the tree is watched.
     explicit.env.pop("GIT_COMMON_DIR")
     explicit.trust(repo)
@@ -920,68 +920,68 @@ def test_env_common_dir_is_the_common_dir(explicit: GG, repo: Path, tmp_path: Pa
 
 
 @pytest.mark.discovery
-def test_env_common_dir_relative_refused(explicit: GG, repo: Path, tmp_path: Path,
+def test_env_common_dir_relative_refused(explicit: GW, repo: Path, tmp_path: Path,
                                          monkeypatch) -> None:
     """Deliberate divergence, fail closed: git reads a relative GIT_COMMON_DIR
     against the cwd during discovery and against the root once it has
     chdir'ed there — `../other` from `a/b` finds no repository at all,
-    `../../other` finds it but reads an empty config. gitguard refuses the
+    `../../other` finds it but reads an empty config. gitwary refuses the
     relative form instead of choosing one of the two."""
     _other_gitdir(repo, tmp_path)
     sub = repo / "a/b"
     sub.mkdir(parents=True)
     for rel in ("../other", "../../other", "", "."):
         monkeypatch.setenv("GIT_COMMON_DIR", rel)
-        with pytest.raises(gg_mod.Refuse, match="GIT_COMMON_DIR"):
-            gg_mod.open_repo(gg_mod.find_root(sub) or repo)
+        with pytest.raises(gw_mod.Refuse, match="GIT_COMMON_DIR"):
+            gw_mod.open_repo(gw_mod.find_root(sub) or repo)
         explicit.env["GIT_COMMON_DIR"] = rel
         r = explicit.run("git", "status", cwd=sub)
         assert r.blocked and "GIT_COMMON_DIR" in r.err, (rel, r.text)
 
 
 @pytest.mark.discovery
-def test_env_common_dir_discovery_head_only(gg: GG, repo: Path, tmp_path: Path,
+def test_env_common_dir_discovery_head_only(gw: GW, repo: Path, tmp_path: Path,
                                             monkeypatch) -> None:
     """With GIT_COMMON_DIR, is_git_directory looks for objects/ and refs/ in
     the common dir: a directory holding a bare HEAD file is a gitdir for
     git's discovery (without `safe.bareRepository=explicit`, which makes git
-    refuse it on its own). gitguard walked past it to the parent's .git."""
+    refuse it on its own). gitwary walked past it to the parent's .git."""
     other = _other_gitdir(repo, tmp_path)
     src = repo / "src"
     src.mkdir()
     (src / "HEAD").write_text("ref: refs/heads/main\n")
-    assert _git_view(gg, src) == (repo.resolve(), (repo / ".git").resolve())   # no env: .git
-    gg.env["GIT_COMMON_DIR"] = str(other)
+    assert _git_view(gw, src) == (repo.resolve(), (repo / ".git").resolve())   # no env: .git
+    gw.env["GIT_COMMON_DIR"] = str(other)
     monkeypatch.setenv("GIT_COMMON_DIR", str(other))
-    r = gg.git("rev-parse", "--absolute-git-dir", cwd=src)
+    r = gw.git("rev-parse", "--absolute-git-dir", cwd=src)
     assert r.rc == 0 and Path(r.out.strip()).resolve() == src.resolve(), r.text   # oracle
-    with pytest.raises(gg_mod.Refuse, match="bare gitdir"):
-        gg_mod.find_root(src)
-    r = gg.run("git", "status", cwd=src)
+    with pytest.raises(gw_mod.Refuse, match="bare gitdir"):
+        gw_mod.find_root(src)
+    r = gw.run("git", "status", cwd=src)
     assert r.blocked and "bare gitdir" in r.err, r.text
 
 
 @pytest.mark.parametrize("form", ["absolute", "root_relative", "subdir_relative"])
-def test_env_index_file_gitlinks_match_ls_files(gg: GG, repo: Path, form: str) -> None:
+def test_env_index_file_gitlinks_match_ls_files(gw: GW, repo: Path, form: str) -> None:
     """GIT_INDEX_FILE: the gitlinks git honours are those of that file. A
     relative value is read against the work tree root git chdirs to, from
     a subdirectory as well (`git rev-parse --git-path index` says so)."""
-    sha = gg.git("rev-parse", "HEAD", cwd=repo).out.strip()
+    sha = gw.git("rev-parse", "HEAD", cwd=repo).out.strip()
     (repo / "a/b").mkdir(parents=True)
     cwd = repo / "a/b" if form == "subdir_relative" else repo
     value = {"absolute": str(repo / "forged.idx"), "root_relative": "forged.idx",
              "subdir_relative": "a/forged.idx"}[form]
-    gg.env["GIT_INDEX_FILE"] = value
-    r = gg.git("update-index", "--add", "--cacheinfo", f"160000,{sha},vendor", cwd=cwd)
+    gw.env["GIT_INDEX_FILE"] = value
+    r = gw.git("update-index", "--add", "--cacheinfo", f"160000,{sha},vendor", cwd=cwd)
     assert r.rc == 0, r.text
     expect = {"absolute": repo / "forged.idx", "root_relative": repo / "forged.idx",
               "subdir_relative": repo / "a/forged.idx"}[form]
     assert expect.is_file()                                        # git wrote it there
-    assert _git_gitlinks(gg, repo) == ["vendor"]                   # oracle
+    assert _git_gitlinks(gw, repo) == ["vendor"]                   # oracle
     assert index_gitlinks(repo / ".git/index") == []               # the gitdir's own: none
     os.environ["GIT_INDEX_FILE"] = value
     try:
-        rp = gg_mod.open_repo(gg_mod.find_root(cwd))
+        rp = gw_mod.open_repo(gw_mod.find_root(cwd))
         assert rp.index.resolve() == expect.resolve()
         assert index_gitlinks(rp.index) == ["vendor"]
     finally:
@@ -1001,7 +1001,7 @@ def _case_insensitive(p: Path) -> bool:
 
 @pytest.mark.parametrize("cmd", CHECKOUT_FROM_INDEX, ids=lambda c: c[0])
 @pytest.mark.parametrize("variant", sorted(INDEX_ESCAPES))
-def test_forged_index_name_is_written_by_git(gg: GG, repo: Path, variant: str, cmd) -> None:
+def test_forged_index_name_is_written_by_git(gw: GW, repo: Path, variant: str, cmd) -> None:
     """Oracle for the [55] attacks: git does write these names from a forged
     index (while it refuses them from a tree, see below). If a git version
     starts validating them, this test fails and [55] can be closed by git."""
@@ -1009,77 +1009,77 @@ def test_forged_index_name_is_written_by_git(gg: GG, repo: Path, variant: str, c
     if variant == "dotgit_case" and not _case_insensitive(repo):
         pytest.skip("`.GIT` is another directory on a case-sensitive filesystem")
     target = (repo / lands).resolve()
-    forge_index(gg, repo, [(0o100644, b"MARKER\n", name)])
+    forge_index(gw, repo, [(0o100644, b"MARKER\n", name)])
     assert not target.exists()
-    gg.git(*cmd, cwd=repo)
+    gw.git(*cmd, cwd=repo)
     assert target.is_file() and target.read_bytes() == b"MARKER\n", f"{variant}: not written"
 
 
 @pytest.mark.parametrize("cmd", CHECKOUT_FROM_INDEX, ids=lambda c: c[0])
-def test_forged_index_absolute_name_is_written_by_git(gg: GG, repo: Path, tmp_path: Path,
+def test_forged_index_absolute_name_is_written_by_git(gw: GW, repo: Path, tmp_path: Path,
                                                       cmd) -> None:
     """Oracle for attack_index_absolute_name: an absolute name is written at
     that very path, anywhere on the disk. (Through a symlinked component —
     macOS `/var` → `/private/var` — git tries to unlink it instead.)"""
     target = tmp_path.resolve() / "abs-escaped"
-    forge_index(gg, repo, [(0o100644, b"MARKER\n", str(target).encode())])
-    gg.git(*cmd, cwd=repo)
+    forge_index(gw, repo, [(0o100644, b"MARKER\n", str(target).encode())])
+    gw.git(*cmd, cwd=repo)
     assert target.read_bytes() == b"MARKER\n"
 
 
-def test_forged_tree_name_is_refused_by_git(gg: GG, repo: Path) -> None:
+def test_forged_tree_name_is_refused_by_git(gw: GW, repo: Path) -> None:
     """Control: the same name in a commit's tree is refused by git
     (verify_path) for every checkout, `restore --source` included — the
     vector is the index, not the objects."""
-    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo, env=gg.env,
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo, env=gw.env,
                           input=b"MARKER\n", capture_output=True, check=True).stdout.decode().strip()
     sub = blob
     for comp, mode in ((b"post-checkout", b"100644"), (b"hooks", b"40000")):
         raw = mode + b" " + comp + b"\0" + bytes.fromhex(sub)
         sub = subprocess.run(["git", "hash-object", "-t", "tree", "-w", "--literally", "--stdin"],
-                             cwd=repo, env=gg.env, input=raw, capture_output=True,
+                             cwd=repo, env=gw.env, input=raw, capture_output=True,
                              check=True).stdout.decode().strip()
-    f = gg.git("rev-parse", "HEAD:f", cwd=repo).out.strip()
+    f = gw.git("rev-parse", "HEAD:f", cwd=repo).out.strip()
     raw = b"40000 .git\0" + bytes.fromhex(sub) + b"100644 f\0" + bytes.fromhex(f)
     tree = subprocess.run(["git", "hash-object", "-t", "tree", "-w", "--literally", "--stdin"],
-                          cwd=repo, env=gg.env, input=raw, capture_output=True,
+                          cwd=repo, env=gw.env, input=raw, capture_output=True,
                           check=True).stdout.decode().strip()
-    c = gg.git("commit-tree", tree, "-p", "HEAD", "-m", "x", cwd=repo).out.strip()
+    c = gw.git("commit-tree", tree, "-p", "HEAD", "-m", "x", cwd=repo).out.strip()
     for cmd in (["restore", f"--source={c}", "--worktree", "--", "."], ["checkout", c, "--", "."],
                 ["checkout", c], ["reset", "--hard", c], ["read-tree", "-u", "-m", c]):
-        gg.git(*cmd, cwd=repo)
+        gw.git(*cmd, cwd=repo)
         assert not (repo / ".git/hooks/post-checkout").exists(), cmd
 
 
-def test_forged_submodule_index_writes_into_superproject(gg: GG, repo: Path,
+def test_forged_submodule_index_writes_into_superproject(gw: GW, repo: Path,
                                                          tmp_path: Path) -> None:
     """Oracle for attack_index_submodule_escape: `checkout -- .` in a
     submodule (what `submodule foreach`, an unwrapped git, runs) writes a
     `../.git/hooks/…` name of its index into the superproject's hooks."""
-    sub = add_submodule(gg, repo, tmp_path)
-    forge_index(gg, sub, [(0o100644, b"MARKER\n", b"../.git/hooks/post-checkout")],
+    sub = add_submodule(gw, repo, tmp_path)
+    forge_index(gw, sub, [(0o100644, b"MARKER\n", b"../.git/hooks/post-checkout")],
                 gitdir=repo / ".git/modules/sub")
-    gg.git("checkout", "--", ".", cwd=sub)
+    gw.git("checkout", "--", ".", cwd=sub)
     assert (repo / ".git/hooks/post-checkout").read_bytes() == b"MARKER\n"
 
 
 @pytest.mark.parametrize("cmd", CHECKOUT_FROM_INDEX[:2], ids=lambda c: c[0])
-def test_forged_index_hook_runs_through_wrapper(gg: GG, repo: Path, tmp_path: Path, cmd) -> None:
+def test_forged_index_hook_runs_through_wrapper(gw: GW, repo: Path, tmp_path: Path, cmd) -> None:
     """End to end: one write into `.git/index` (volatile, outside the
     fingerprint), then the user's wrapped `checkout -- .` wrote the hook and
-    ran it in the same command. gitguard refuses before git starts, and the
+    ran it in the same command. gitwary refuses before git starts, and the
     way out it names (`rm` the index, `git reset`) brings the repository back."""
     mark = tmp_path / "PWNED"
-    forge_index(gg, repo, [(0o100755, f"#!/bin/sh\ntouch {mark}\n".encode(),
+    forge_index(gw, repo, [(0o100755, f"#!/bin/sh\ntouch {mark}\n".encode(),
                             b".git/hooks/post-checkout")])
-    r = gg.run("git", *cmd, cwd=repo)
+    r = gw.run("git", *cmd, cwd=repo)
     assert not mark.exists(), "the forged hook ran"
     assert r.blocked and not (repo / ".git/hooks/post-checkout").exists(), r.text
     assert "forged git index" in r.err and "git reset -q" in r.err, r.err
     (repo / ".git/index").unlink()
-    assert not gg.run("git", "reset", "-q", cwd=repo).blocked
-    assert not gg.run("git", *cmd, cwd=repo).blocked
-    assert not mark.exists() and gg.git("status", "--porcelain", cwd=repo).out == ""
+    assert not gw.run("git", "reset", "-q", cwd=repo).blocked
+    assert not gw.run("git", *cmd, cwd=repo).blocked
+    assert not mark.exists() and gw.git("status", "--porcelain", cwd=repo).out == ""
 
 
 # verify_path as git applies it (`update-index --cacheinfo` calls it), with
@@ -1102,33 +1102,33 @@ VERIFY_PATH_NAMES = [
 
 
 @pytest.mark.parametrize("mode", [0o100644, 0o120000], ids=["file", "symlink"])
-def test_verify_path_matches_git(gg: GG, tmp_path: Path, mode: int) -> None:
-    """Every name: gitguard refuses exactly what git's verify_path refuses
-    (a name git refuses but gitguard accepts is a [55] bypass; the reverse,
+def test_verify_path_matches_git(gw: GW, tmp_path: Path, mode: int) -> None:
+    """Every name: gitwary refuses exactly what git's verify_path refuses
+    (a name git refuses but gitwary accepts is a [55] bypass; the reverse,
     a false positive)."""
     blob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
     o = tmp_path / "o"
-    assert gg.git("init", "-q", str(o)).rc == 0
+    assert gw.git("init", "-q", str(o)).rc == 0
     diffs = []
     for i, name in enumerate(VERIFY_PATH_NAMES):
-        env = dict(gg.env, GIT_INDEX_FILE=str(tmp_path / f"idx{i}"))
+        env = dict(gw.env, GIT_INDEX_FILE=str(tmp_path / f"idx{i}"))
         r = subprocess.run([b"git", b"-c", b"core.protectHFS=true", b"-c", b"core.protectNTFS=true",
                             b"update-index", b"--add", b"--cacheinfo",
                             b"%o,%s,%s" % (mode, blob.encode(), name)],
                            cwd=o, env=env, capture_output=True)
         git_ok = r.returncode == 0
         assert git_ok or b"nvalid path" in r.stderr, (name, r.stderr)   # the oracle is verify_path
-        if git_ok != gg_mod.verify_path(name, mode):
+        if git_ok != gw_mod.verify_path(name, mode):
             diffs.append((name, "git accepts" if git_ok else "git refuses", r.stderr[:80]))
     assert not diffs, diffs
 
 
 # ================== local remotes: the hooks git runs on push are watched [61]
-def _remote_layout(gg: GG, tmp_path: Path, layout: str) -> str:
+def _remote_layout(gw: GW, tmp_path: Path, layout: str) -> str:
     """Build a remote in the volume; return the URL to configure."""
     v = tmp_path / "vol"
     v.mkdir()
-    init = lambda *a: gg.git("init", "-q", *map(str, a))
+    init = lambda *a: gw.git("init", "-q", *map(str, a))
     if layout == "bare":
         init("--bare", v / "r.git"); return str(v / "r.git")
     if layout == "bare_suffix_tried":
@@ -1166,9 +1166,9 @@ def _remote_layout(gg: GG, tmp_path: Path, layout: str) -> str:
     if layout == "linked_worktree":
         init(v / "m")
         (v / "m/f").write_text("f\n")
-        gg.git("add", "f", cwd=v / "m")
-        gg.git("commit", "-qm", "f", cwd=v / "m")
-        assert gg.git("worktree", "add", "-q", str(v / "w"), cwd=v / "m").rc == 0
+        gw.git("add", "f", cwd=v / "m")
+        gw.git("commit", "-qm", "f", cwd=v / "m")
+        assert gw.git("worktree", "add", "-q", str(v / "w"), cwd=v / "m").rc == 0
         return str(v / "w")
     raise AssertionError(layout)
 
@@ -1183,32 +1183,32 @@ REMOTE_LAYOUTS = ["bare", "bare_suffix_tried", "bare_trailing_slash", "file_url"
 
 
 @pytest.mark.parametrize("layout", REMOTE_LAYOUTS)
-def test_local_remote_hooks_git_runs_are_watched(gg: GG, repo: Path, tmp_path: Path,
+def test_local_remote_hooks_git_runs_are_watched(gw: GW, repo: Path, tmp_path: Path,
                                                  layout: str) -> None:
-    url = _remote_layout(gg, tmp_path, layout)
+    url = _remote_layout(gw, tmp_path, layout)
     log = tmp_path / "ran.log"
     hooks = [p for p in (tmp_path / "vol").rglob("hooks") if p.is_dir()]
     for h in hooks:
         write_exec(h / "pre-receive", f"#!/bin/sh\necho {h} >> '{log}'\n")
-    gg.git("remote", "add", "origin", url, cwd=repo)
-    r = gg.git("push", "-q", "origin", "HEAD:refs/heads/probe", cwd=repo)
+    gw.git("remote", "add", "origin", url, cwd=repo)
+    r = gw.git("push", "-q", "origin", "HEAD:refs/heads/probe", cwd=repo)
     assert r.rc == 0 and log.exists(), f"oracle: git ran no pre-receive\n{r.text}"
     ran = Path(log.read_text().split("\n")[0])
-    gg.trust(repo)
+    gw.trust(repo)
     write_exec(ran / "pre-receive", EVIL)
-    res = gg.check(repo)
+    res = gw.check(repo)
     assert res.blocked, f"{ran}/pre-receive (run by git push) rewritten, accepted\n{res.text}"
 
 
 @pytest.mark.parametrize("source", ["remote_config", "global_config", "system_config"])
 @pytest.mark.parametrize("layout", REMOTE_LAYOUTS)
-def test_local_remote_relative_hookspath_where_git_resolves_it(gg: GG, repo: Path, tmp_path: Path,
+def test_local_remote_relative_hookspath_where_git_resolves_it(gw: GW, repo: Path, tmp_path: Path,
                                                                layout: str, source: str) -> None:
     """[67] a relative core.hooksPath in the remote's config, [68] in the
     global or system config (git reads them in the remote too): a
     pre-receive is planted under `rel-hooks/` in every gitdir and work tree
     of the volume, git says which one it runs, rewriting that one is seen."""
-    url = _remote_layout(gg, tmp_path, layout)
+    url = _remote_layout(gw, tmp_path, layout)
     vol = tmp_path / "vol"
     if source == "remote_config":
         for c in vol.rglob("config"):
@@ -1216,49 +1216,49 @@ def test_local_remote_relative_hookspath_where_git_resolves_it(gg: GG, repo: Pat
                 with open(c, "a") as fh:
                     fh.write("[core]\n\thooksPath = rel-hooks\n")
     elif source == "global_config":
-        gg.git("config", "--global", "core.hooksPath", "rel-hooks")
+        gw.git("config", "--global", "core.hooksPath", "rel-hooks")
     else:
         (tmp_path / "sys.cfg").write_text("[core]\n\thooksPath = rel-hooks\n")
-        gg.env["GIT_CONFIG_SYSTEM"] = str(tmp_path / "sys.cfg")
-        del gg.env["GIT_CONFIG_NOSYSTEM"]          # the fixture isolates the system file
+        gw.env["GIT_CONFIG_SYSTEM"] = str(tmp_path / "sys.cfg")
+        del gw.env["GIT_CONFIG_NOSYSTEM"]          # the fixture isolates the system file
     log = tmp_path / "ran.log"
     gitdirs = {h.parent for h in vol.rglob("HEAD")
                if (h.parent / "objects").is_dir() or (h.parent / "commondir").is_file()}
     for d in gitdirs | {g.parent for g in gitdirs}:
         h = d / "rel-hooks"
         write_exec(h / "pre-receive", f"#!/bin/sh\necho {h} >> '{log}'\n")
-    gg.git("remote", "add", "origin", url, cwd=repo)
-    r = gg.git("push", "-q", "origin", "HEAD:refs/heads/probe", cwd=repo)
+    gw.git("remote", "add", "origin", url, cwd=repo)
+    r = gw.git("push", "-q", "origin", "HEAD:refs/heads/probe", cwd=repo)
     assert r.rc == 0 and log.exists(), f"oracle: git ran no pre-receive\n{r.text}"
     ran = Path(log.read_text().split("\n")[0])
-    gg.trust(repo)
+    gw.trust(repo)
     write_exec(ran / "pre-receive", EVIL)
-    res = gg.check(repo)
+    res = gw.check(repo)
     assert res.blocked, f"{ran}/pre-receive (run by git push) rewritten, accepted\n{res.text}"
 
 
 @pytest.mark.parametrize("source", ["global", "dash_c"])
-def test_global_relative_hookspath_in_a_submodule_as_git(gg: GG, repo: Path, tmp_path: Path,
+def test_global_relative_hookspath_in_a_submodule_as_git(gw: GW, repo: Path, tmp_path: Path,
                                                          source: str) -> None:
     """[68] a relative core.hooksPath from the global config or from `-c`
     (GIT_CONFIG_PARAMETERS reaches a submodule's git) resolves in the
     submodule's tree: `submodule update --force` runs
     `sub/.githooks/post-checkout`, git says so, rewriting it is seen."""
     from tests.attacks._helpers import add_submodule
-    sub = add_submodule(gg, repo, tmp_path)
+    sub = add_submodule(gw, repo, tmp_path)
     log = tmp_path / "ran.log"
     for d in (repo, sub, repo / ".git/modules/sub"):
         write_exec(d / ".githooks/post-checkout", f"#!/bin/sh\necho {d} >> '{log}'\n")
     pre = ["-c", "core.hooksPath=.githooks"] if source == "dash_c" else []
     if source == "global":
-        gg.git("config", "--global", "core.hooksPath", ".githooks")
-    r = gg.git(*pre, "submodule", "update", "--force", "-q", cwd=repo)
+        gw.git("config", "--global", "core.hooksPath", ".githooks")
+    r = gw.git(*pre, "submodule", "update", "--force", "-q", cwd=repo)
     assert r.rc == 0 and log.exists(), f"oracle: git ran no post-checkout\n{r.text}"
     ran = Path(log.read_text().split("\n")[0])
     assert ran == sub, ran
-    gg.trust(repo)
+    gw.trust(repo)
     write_exec(ran / ".githooks/post-checkout", EVIL)
-    r = gg.run("git", *pre, "submodule", "update", "--force", "-q", cwd=repo)
+    r = gw.run("git", *pre, "submodule", "update", "--force", "-q", cwd=repo)
     assert r.blocked, f"{ran}/.githooks/post-checkout rewritten, accepted\n{r.text}"
 
 
@@ -1293,7 +1293,7 @@ ALIAS_FORMS = {
 
 
 @pytest.mark.parametrize("form", list(ALIAS_FORMS))
-def test_alias_command_word_as_git(gg: GG, tmp_path: Path, form: str) -> None:
+def test_alias_command_word_as_git(gw: GW, tmp_path: Path, form: str) -> None:
     """`_alias_parts` says which git command an alias runs, `_split_cmdline`
     how its value splits; git is the oracle. With `alias.co = <form>`,
     GIT_TRACE says which builtin git ran (`built-in: git checkout`): the port
@@ -1307,22 +1307,22 @@ def test_alias_command_word_as_git(gg: GG, tmp_path: Path, form: str) -> None:
     import shlex
     import subprocess
     r = tmp_path / "r"
-    gg.git("init", "-q", str(r))
+    gw.git("init", "-q", str(r))
     (r / "a").write_text("a\n")
-    gg.git("add", "a", cwd=r)
-    gg.git("commit", "-qm", "i", cwd=r)
-    gg.git("checkout", "-qb", "feature", cwd=r)
-    gg.git("config", "alias.co", ALIAS_FORMS[form], cwd=r)
+    gw.git("add", "a", cwd=r)
+    gw.git("commit", "-qm", "i", cwd=r)
+    gw.git("checkout", "-qb", "feature", cwd=r)
+    gw.git("config", "alias.co", ALIAS_FORMS[form], cwd=r)
     stored = [v for s, k, v in parse_git_config(r / ".git/config") if (s, k) == ("alias", "co")]
-    assert stored == [gg.git("config", "alias.co", cwd=r).out[:-1]], stored
+    assert stored == [gw.git("config", "alias.co", cwd=r).out[:-1]], stored
     value = stored[0]
-    res = subprocess.run(["git", "co", "main"], cwd=r, env={**gg.env, "GIT_TRACE": "1"},
+    res = subprocess.run(["git", "co", "main"], cwd=r, env={**gw.env, "GIT_TRACE": "1"},
                          capture_output=True, text=True, errors="replace")
     exp = re.search(r"alias expansion: co => (.*)", res.stderr)
     ran = re.search(r"trace: built-in: git (\S+)", res.stderr)
-    word = gg_mod._alias_parts(value)[0]
+    word = gw_mod._alias_parts(value)[0]
     if exp is not None and not value.lstrip(" \t\n\r").startswith("-"):
-        assert gg_mod._split_cmdline(value) == shlex.split(exp.group(1)), exp.group(0)
+        assert gw_mod._split_cmdline(value) == shlex.split(exp.group(1)), exp.group(0)
     if value.startswith("!"):
         assert word is None
     elif ran is not None:
@@ -1343,19 +1343,19 @@ BOOL_VARIANTS = ["true", "TRUE", "yes", "On", "false", "no", "OFF", "", "0", "1"
 
 
 @pytest.mark.parametrize("value", BOOL_VARIANTS)
-def test_git_maybe_bool_matches_git(gg: GG, repo: Path, value: str) -> None:
+def test_git_maybe_bool_matches_git(gw: GW, repo: Path, value: str) -> None:
     """_git_maybe_bool against git_parse_maybe_bool (`git config
     --type=bool`, which dies on what is no boolean): a boolean
     `core.fsmonitor` is the daemon or nothing, never a path the scan
     should resolve — the pin's `false` reaches every child's scan."""
     r = subprocess.run(["git", "-c", f"core.fsmonitor={value}", "config", "--type=bool", "core.fsmonitor"],
-                       cwd=repo, env=gg.raw_env, capture_output=True, text=True)
+                       cwd=repo, env=gw.raw_env, capture_output=True, text=True)
     want = None if r.returncode != 0 else r.stdout.strip() == "true"
-    assert gg_mod._git_maybe_bool(value) is want, (value, r.stdout, r.stderr)
+    assert gw_mod._git_maybe_bool(value) is want, (value, r.stdout, r.stderr)
 
 
 @pytest.mark.parametrize("var", ["GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"])
-def test_global_config_files_empty_variable_means_no_file(gg: GG, tmp_path: Path, monkeypatch,
+def test_global_config_files_empty_variable_means_no_file(gw: GW, tmp_path: Path, monkeypatch,
                                                          var: str) -> None:
     """[140] git distinguishes an unset GIT_CONFIG_SYSTEM / GIT_CONFIG_GLOBAL
     from an empty one: empty names no file at all (git_system_config,
@@ -1364,10 +1364,10 @@ def test_global_config_files_empty_variable_means_no_file(gg: GG, tmp_path: Path
     `~/.gitconfig` where git read none ([133]'s class, a tree file named
     by a value git never saw). And a GIT_CONFIG_GLOBAL that names a file
     replaces `~/.gitconfig` and the XDG file, it does not add to them."""
-    home = Path(gg.env["HOME"])
+    home = Path(gw.env["HOME"])
     (home / ".config/git").mkdir(parents=True)
     (home / ".config/git/config").write_text("[a]\n\tb = 1\n")
-    env = dict(gg.env)
+    env = dict(gw.env)
     env[var] = ""
     if var == "GIT_CONFIG_SYSTEM":
         env.pop("GIT_CONFIG_NOSYSTEM")
@@ -1377,7 +1377,7 @@ def test_global_config_files_empty_variable_means_no_file(gg: GG, tmp_path: Path
         monkeypatch.setenv(k, v)
     want = _git_origins(env, tmp_path)
     got = {p.resolve() for p in global_config_files()}
-    assert want <= got, f"git reads {want - got}, which gitguard does not parse"
+    assert want <= got, f"git reads {want - got}, which gitwary does not parse"
     if var == "GIT_CONFIG_GLOBAL":
         assert not any(home.resolve() in p.parents for p in got), got
         monkeypatch.setenv(var, str(tmp_path / "g.cfg"))
@@ -1403,20 +1403,20 @@ def test_global_config_files_empty_variable_means_no_file(gg: GG, tmp_path: Path
     ([("/m/", "insteadOf", "/m/")], "/m/x.git"),                              # onto itself
     ([("/n/", "insteadOf", "/m/"), ("/o/", "insteadOf", "/n/")], "/m/x.git"),  # once, not chained
 ])
-def test_insteadof_rewrite_contains_what_git_uses(gg: GG, repo: Path, rules, url: str) -> None:
-    """[151] the URLs gitguard reads a remote as (`_rewritten`: the URL
+def test_insteadof_rewrite_contains_what_git_uses(gw: GW, repo: Path, rules, url: str) -> None:
+    """[151] the URLs gitwary reads a remote as (`_rewritten`: the URL
     and its rewriting by every rule that matches, a superset of git's
     longest match) contain the ones git uses, fetch and push, for a
     configured remote and for a URL on the command line."""
     for base, key, prefix in rules:
-        assert gg.git("config", "--add", f"url.{base}.{key}", prefix, cwd=repo).rc == 0
-    gg.git("remote", "add", "origin", url, cwd=repo)
-    used = {gg.git("remote", "get-url", "origin", cwd=repo).out.strip(),
-            gg.git("remote", "get-url", "--push", "origin", cwd=repo).out.strip(),
-            gg.git("ls-remote", "--get-url", url, cwd=repo).out.strip()}
+        assert gw.git("config", "--add", f"url.{base}.{key}", prefix, cwd=repo).rc == 0
+    gw.git("remote", "add", "origin", url, cwd=repo)
+    used = {gw.git("remote", "get-url", "origin", cwd=repo).out.strip(),
+            gw.git("remote", "get-url", "--push", "origin", cwd=repo).out.strip(),
+            gw.git("ls-remote", "--get-url", url, cwd=repo).out.strip()}
     assert all(used), used
     rewrites = [(prefix, base) for base, key, prefix in rules]
-    assert used <= set(gg_mod._rewritten(url, rewrites)), (used, rules)
+    assert used <= set(gw_mod._rewritten(url, rewrites)), (used, rules)
 
 
 # ------------------------------- [156] objects/info/alternates → where git enters
@@ -1470,26 +1470,26 @@ def _alternate_stores(tmp_path: Path) -> dict[str, Path]:
     return stores
 
 
-def _git_alternate_repos(gg: GG, repo: Path, tmp_path: Path) -> set[str]:
+def _git_alternate_repos(gw: GW, repo: Path, tmp_path: Path) -> set[str]:
     """Oracle: where git goes for the refs of `repo`'s alternates —
     `core.alternateRefsCommand` is run in place of `git --git-dir=<path>
     for-each-ref`, with that path."""
     log = tmp_path / "entered"
     write_exec(tmp_path / "refs-of", f"#!/bin/sh\nprintf '%s\\0' \"$1\" >> '{log}'\n")
-    r = gg.git("-c", f"core.alternateRefsCommand={tmp_path / 'refs-of'}", "rev-list", "--alternate-refs",
+    r = gw.git("-c", f"core.alternateRefsCommand={tmp_path / 'refs-of'}", "rev-list", "--alternate-refs",
                "--all", cwd=repo)
     assert r.rc == 0, r.text
     return {os.fsdecode(p) for p in log.read_bytes().split(b"\0")[:-1]} if log.exists() else set()
 
 
-def _gg_alternate_repos(repo: Path) -> set[str]:
-    return {str(g) for g, _ in gg_mod.alternate_repos(repo.resolve() / ".git")[0]}
+def _gw_alternate_repos(repo: Path) -> set[str]:
+    return {str(g) for g, _ in gw_mod.alternate_repos(repo.resolve() / ".git")[0]}
 
 
 @pytest.mark.parametrize("name", ALTERNATES_VARIANTS)
-def test_alternate_repositories_as_git_enters_them(gg: GG, repo: Path, tmp_path: Path, name: str) -> None:
+def test_alternate_repositories_as_git_enters_them(gw: GW, repo: Path, tmp_path: Path, name: str) -> None:
     """[156] alternate_repos against git: the repositories git lists the
-    refs of are the ones gitguard watches and covers, byte variant by byte
+    refs of are the ones gitwary watches and covers, byte variant by byte
     variant; the expected column pins the reading itself."""
     text, want, *nested = ALTERNATES_VARIANTS[name]
     stores = _alternate_stores(tmp_path)
@@ -1499,28 +1499,28 @@ def test_alternate_repositories_as_git_enters_them(gg: GG, repo: Path, tmp_path:
     (repo / ".git/objects/info/alternates").write_bytes(os.fsencode(text.format(**fmt)))
     if nested:
         (stores["a"] / "objects/info/alternates").write_bytes(os.fsencode(nested[0].format(**fmt)))
-    entered = _git_alternate_repos(gg, repo, tmp_path)
+    entered = _git_alternate_repos(gw, repo, tmp_path)
     assert entered == {str(stores[k].resolve()) for k in want}, name
-    assert _gg_alternate_repos(repo) == entered, name
+    assert _gw_alternate_repos(repo) == entered, name
 
 
-def test_alternates_nesting_stops_where_git_stops(gg: GG, repo: Path, tmp_path: Path) -> None:
+def test_alternates_nesting_stops_where_git_stops(gw: GW, repo: Path, tmp_path: Path) -> None:
     """[156] a chain of alternates: git follows it for a fixed number of
-    levels ("nesting too deep") and gitguard as far."""
+    levels ("nesting too deep") and gitwary as far."""
     chain = [tmp_path / f"c{i}" for i in range(9)]
     for d in chain:
         (d / "objects/info").mkdir(parents=True)
         (d / "refs").mkdir()
     for d, nxt in zip([repo / ".git", *chain], chain):
         (d / "objects/info/alternates").write_text(f"{nxt}/objects\n")
-    entered = _git_alternate_repos(gg, repo, tmp_path)
+    entered = _git_alternate_repos(gw, repo, tmp_path)
     assert 1 < len(entered) < len(chain), entered
-    assert _gg_alternate_repos(repo) == entered
+    assert _gw_alternate_repos(repo) == entered
 
 
 def test_alternates_nul_is_refused(repo: Path) -> None:
     """[156] a NUL in an alternates file: git stops reading there (C
     string); refused, like every file read as a path ([53])."""
     (repo / ".git/objects/info/alternates").write_bytes(b"/a/objects\0\n/b/objects\n")
-    with pytest.raises(gg_mod.Refuse):
-        gg_mod.alternate_repos(repo / ".git")
+    with pytest.raises(gw_mod.Refuse):
+        gw_mod.alternate_repos(repo / ".git")

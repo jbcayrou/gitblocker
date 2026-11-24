@@ -1,5 +1,5 @@
 # The "Five attacks" demo. Each attack: a story, the sandbox terminal, the host
-# terminal without gitguard, the host terminal with gitguard.
+# terminal without gitwary, the host terminal with gitwary.
 # A line is {c: class, s: text}; class is one of p (prompt), dim, pwn, add, mod,
 # x, w, hint, hr, or empty. `refuse` builds the standard refusal block
 # (rule, "has changed" line, the changes, an optional diff, rule, hints) —
@@ -87,12 +87,12 @@
     - { c: dim, s: "warning: adding embedded git repository: vendor/lib" }
     - { c: p, s: "$ git status" }
     - { c: hr, s: "────────────────────────────────────────────────────────" }
-    - { c: x, s: "✗ gitguard: nested repository: vendor/lib/.git — a gitlink for this" }
+    - { c: x, s: "✗ gitwary: nested repository: vendor/lib/.git — a gitlink for this" }
     - { c: x, s: "  directory exists in the index, git will execute its config." }
     - { c: dim, s: "  If it is your own vendored repository: inspect its config and hooks," }
-    - { c: dim, s: "  declare it in .gitmodules, git submodule absorbgitdirs, gitguard trust." }
+    - { c: dim, s: "  declare it in .gitmodules, git submodule absorbgitdirs, gitwary trust." }
     - { c: dim, s: "  Otherwise delete vendor/lib/.git first, then git rm --cached lib." }
-    - { c: x, s: "✗ gitguard: refusing to run git." }
+    - { c: x, s: "✗ gitwary: refusing to run git." }
 
 - id: redirect
   label: A redirected .git
@@ -107,6 +107,6 @@
     - { c: dim, s: "3f2a9c1 fix typo" }
   with:
     - { c: p, s: "$ git log --oneline -1" }
-    - { c: x, s: "✗ gitguard: ~/work/api/.git points inside the work tree" }
+    - { c: x, s: "✗ gitwary: ~/work/api/.git points inside the work tree" }
     - { c: dim, s: "  (~/work/api/evil/repo.git)" }
-    - { c: x, s: "✗ gitguard: refusing to run git." }
+    - { c: x, s: "✗ gitwary: refusing to run git." }

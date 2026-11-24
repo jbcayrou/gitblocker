@@ -1,6 +1,6 @@
-# gitguard
+# gitwary
 
-[![tests](https://github.com/jbcayrou/gitguard/actions/workflows/tests.yml/badge.svg)](https://github.com/jbcayrou/gitguard/actions/workflows/tests.yml)
+[![tests](https://github.com/jbcayrou/gitwary/actions/workflows/tests.yml/badge.svg)](https://github.com/jbcayrou/gitwary/actions/workflows/tests.yml)
 
 Refuses to run `git` on a repository whose trusted files (`.git/config`,
 hooks, `.gitmodules`, gitfiles, every path the config makes git execute…)
@@ -23,7 +23,7 @@ shell. That is the sandbox-to-host pivot.
 
 Sandboxing layers (AppArmor/seccomp profiles, a global `core.hooksPath`,
 `safe.bareRepository=explicit`, rootless uid mapping) prevent some of it.
-gitguard **detects** the rest: it refuses to run git until you have looked.
+gitwary **detects** the rest: it refuses to run git until you have looked.
 
 ## You are not the only one running git
 
@@ -44,7 +44,7 @@ because you merely *looked* at the repository:
   name and never see your alias.
 
 Which git each of these finds depends on the `PATH` it was started with, not
-on your shell's aliases. That is why the install below puts gitguard **as
+on your shell's aliases. That is why the install below puts gitwary **as
 `git`** in a directory ahead of the real one: everything that resolves `git`
 through the `PATH` is then wrapped — prompts, `command git`, scripts, and
 editors started from a shell (VS Code resolves your login shell's
@@ -53,7 +53,7 @@ environment at startup, even when launched from the Dock).
 Still outside: a tool with a hardcoded `/usr/bin/git`, a GUI started by a
 launcher with a minimal `PATH`, and the git that hooks or `rebase --exec`
 run (the real git puts its own exec path first). For VS Code, set `git.path`
-to the gitguard symlink to remove the doubt. Tools built on libgit2 rather
+to the gitwary symlink to remove the doubt. Tools built on libgit2 rather
 than the git binary do not run hooks or config commands and are outside this
 picture.
 
@@ -65,7 +65,7 @@ That silence is the signal.
 
 ## How it works
 
-`gitguard trust` records a **fingerprint** of:
+`gitwary trust` records a **fingerprint** of:
 
 - everything in `.git/`, at any depth, `modules/` and `worktrees/` included,
   except what git rewrites in normal operation (objects, refs, logs, index,
@@ -98,13 +98,13 @@ rebase todo, an index entry whose name escapes the work tree — `.git/hooks/x`,
 characters in names…) or unknown repository → git is not run. The config is parsed by a port of git's own parser, never by
 calling `git config`: git would honour the config being judged.
 
-The fingerprint lives in `~/.local/state/gitguard/`, outside any mounted
-volume, with a backup of the watched files so `gitguard restore` can put
+The fingerprint lives in `~/.local/state/gitwary/`, outside any mounted
+volume, with a backup of the watched files so `gitwary restore` can put
 them back.
 
 It is a fingerprint, not a blocklist of "dangerous" config keys: there is
 nothing to keep up to date with git's CVEs, and no key it can miss. The
-price is an explicit `gitguard trust` when *you* change your hooks, remotes
+price is an explicit `gitwary trust` when *you* change your hooks, remotes
 or config; see "Day to day" for how much of that is automated.
 
 ## Install
@@ -113,30 +113,30 @@ Two things to wrap: the `git` you type, and the `git` every git runs its
 children through — git's **exec path** (`git --exec-path`). A command
 enters other repositories only through children (`git status` in a
 submodule, `git pull` in a hook, the `index-pack` of a clone, a repository
-planted in the work tree), and a child that is gitguard judges the
+planted in the work tree), and a child that is gitwary judges the
 repository it enters; a raw one does not (DESIGN-exec-path.md). Without
-the second wrap gitguard checks the repositories you run git in, as
-before, and `gitguard trust` says so.
+the second wrap gitwary checks the repositories you run git in, as
+before, and `gitwary trust` says so.
 
 ### Per user (Linux, macOS)
 
 ```sh
-install -m 755 gitguard.py ~/bin/gitguard
-ln -s ~/bin/gitguard ~/bin/git      # a directory ahead of the real git in your PATH
-gitguard exec-path                  # builds ~/.local/lib/gitguard-exec (or the directory you give)
+install -m 755 gitwary.py ~/bin/gitwary
+ln -s ~/bin/gitwary ~/bin/git      # a directory ahead of the real git in your PATH
+gitwary exec-path                  # builds ~/.local/lib/gitwary-exec (or the directory you give)
 ```
 
 then, in your shell profile:
 
 ```sh
-export GIT_EXEC_PATH=~/.local/lib/gitguard-exec
+export GIT_EXEC_PATH=~/.local/lib/gitwary-exec
 ```
 
-gitguard detects it is called `git` and switches to exec mode. `gitguard
+gitwary detects it is called `git` and switches to exec mode. `gitwary
 exec-path` links every entry of the real git's exec path into the
-directory, `git` to gitguard and `git.real` to the real binary, which
-gitguard runs before looking at the `PATH` (a GUI app's `PATH` may hold
-another git). Run it again after a git upgrade; `gitguard trust` tells
+directory, `git` to gitwary and `git.real` to the real binary, which
+gitwary runs before looking at the `PATH` (a GUI app's `PATH` may hold
+another git). Run it again after a git upgrade; `gitwary trust` tells
 you when it is stale. The variable reaches what your login shell starts;
 cron, systemd units and GUI apps need it set their own way (`launchctl
 setenv GIT_EXEC_PATH …` on macOS, `Environment=` in a unit, the crontab)
@@ -146,68 +146,68 @@ If you only want the `git` you type wrapped, an alias is enough, with the
 limits described above:
 
 ```sh
-alias git='gitguard git'
+alias git='gitwary git'
 ```
 
 ### System-wide (Debian/Ubuntu)
 
-To wrap every git on the machine, cron and GUIs included, gitguard is
+To wrap every git on the machine, cron and GUIs included, gitwary is
 installed *as* `/usr/bin/git` and at the exec path, `/usr/lib/git-core/git`,
 and the real binaries are diverted to `git.real` beside them. The package
 does it:
 
 ```sh
-ci/build-deb.sh                              # needs dpkg-deb; writes dist/gitguard_<version>_all.deb
-sudo apt install ./dist/gitguard_*_all.deb
+ci/build-deb.sh                              # needs dpkg-deb; writes dist/gitwary_<version>_all.deb
+sudo apt install ./dist/gitwary_*_all.deb
 ```
 
 `apt upgrade git` then installs every new git at the diverted names, never
-over gitguard, and `sudo apt remove gitguard` puts the real git back, byte
+over gitwary, and `sudo apt remove gitwary` puts the real git back, byte
 for byte. dpkg does not drop a diversion by itself: the package's `postrm`
 does. Trust records live in each user's home and are left alone. The
-whole cycle — install, an upgrade of git, an upgrade of gitguard, remove,
+whole cycle — install, an upgrade of git, an upgrade of gitwary, remove,
 purge, the removal of git itself — is replayed at every push on Debian 12,
 Debian 13, Ubuntu 24.04 and Ubuntu 26.04 (`ci/test-deb.sh`).
 
 The same by hand, which the package takes over if you install it later:
 
 ```sh
-sudo install -m 755 gitguard.py /usr/bin/gitguard
-sudo dpkg-divert --package gitguard --add --rename --divert /usr/bin/git.real /usr/bin/git
-sudo ln -s gitguard /usr/bin/git
-sudo dpkg-divert --package gitguard --add --rename --divert /usr/lib/git-core/git.real /usr/lib/git-core/git
-sudo ln -s /usr/bin/gitguard /usr/lib/git-core/git
+sudo install -m 755 gitwary.py /usr/bin/gitwary
+sudo dpkg-divert --package gitwary --add --rename --divert /usr/bin/git.real /usr/bin/git
+sudo ln -s gitwary /usr/bin/git
+sudo dpkg-divert --package gitwary --add --rename --divert /usr/lib/git-core/git.real /usr/lib/git-core/git
+sudo ln -s /usr/bin/gitwary /usr/lib/git-core/git
 ```
 
-gitguard runs a `git.real` found next to the name it was invoked by
+gitwary runs a `git.real` found next to the name it was invoked by
 before looking at the `PATH`, so no environment variable is needed (cron,
 systemd and GUIs would not get one). The 160 dashed builtins of
 `/usr/lib/git-core` (`git-status`, `git-receive-pack`…) are symlinks to
-`git` and land on gitguard too: invoked under a dashed name it runs that
+`git` and land on gitwary too: invoked under a dashed name it runs that
 command; under `git-receive-pack`, `git-upload-pack` and
 `git-upload-archive` (sshd, for every push and fetch *to* the machine) it
 passes straight to the real git, since they serve a repository named by
 argument and run nothing of the caller's. Upgrading a hand-made install
-is overwriting `/usr/bin/gitguard`. To undo it — all three lines: with
-`/usr/bin/gitguard` deleted and the diversions left, `/usr/bin/git` links
+is overwriting `/usr/bin/gitwary`. To undo it — all three lines: with
+`/usr/bin/gitwary` deleted and the diversions left, `/usr/bin/git` links
 to nothing, and reinstalling git does not repair it (dpkg keeps writing
 the real one to `git.real`):
 
 ```sh
-sudo rm /usr/bin/git /usr/lib/git-core/git /usr/bin/gitguard
-sudo dpkg-divert --package gitguard --rename --remove /usr/bin/git
-sudo dpkg-divert --package gitguard --rename --remove /usr/lib/git-core/git
+sudo rm /usr/bin/git /usr/lib/git-core/git /usr/bin/gitwary
+sudo dpkg-divert --package gitwary --rename --remove /usr/bin/git
+sudo dpkg-divert --package gitwary --rename --remove /usr/lib/git-core/git
 ```
 
 Other distributions have no `dpkg-divert`: renaming the two binaries by
-hand (`git` → `git.real`, a symlink to gitguard in its place, under
+hand (`git` → `git.real`, a symlink to gitwary in its place, under
 `/usr/bin` and `$(git --exec-path)`) works until the next package upgrade
-puts the real git back, which `gitguard trust` reports. Or build the exec
+puts the real git back, which `gitwary trust` reports. Or build the exec
 path once for everyone and set the variable system-wide:
 
 ```sh
-sudo gitguard exec-path /usr/local/lib/gitguard-exec
-echo 'GIT_EXEC_PATH=/usr/local/lib/gitguard-exec' | sudo tee -a /etc/environment
+sudo gitwary exec-path /usr/local/lib/gitwary-exec
+echo 'GIT_EXEC_PATH=/usr/local/lib/gitwary-exec' | sudo tee -a /etc/environment
 ```
 
 ### macOS
@@ -218,11 +218,11 @@ covers everything started from a login shell, VS Code included (set
 `git.path` there); for GUI apps:
 
 ```sh
-launchctl setenv GIT_EXEC_PATH ~/.local/lib/gitguard-exec
+launchctl setenv GIT_EXEC_PATH ~/.local/lib/gitwary-exec
 ```
 
 `git.real` matters here: a GUI app's `PATH` holds only Apple's git, which
-would become the real one without it. Run `gitguard exec-path` again after
+would become the real one without it. Run `gitwary exec-path` again after
 `brew upgrade git`.
 
 ### Check the install
@@ -230,18 +230,18 @@ would become the real one without it. Run `gitguard exec-path` again after
 In any repository:
 
 ```sh
-gitguard trust          # no warning about the exec path: children are wrapped
-git --exec-path         # the directory whose `git` is gitguard
+gitwary trust           # no warning about the exec path: children are wrapped
+git --exec-path         # the directory whose `git` is gitwary
 ```
 
-`gitguard trust`, `list` and `retrust` warn while the exec path does not
-lead to gitguard, or leads to a stale directory (a git upgrade added or
+`gitwary trust`, `list` and `retrust` warn while the exec path does not
+lead to gitwary, or leads to a stale directory (a git upgrade added or
 removed entries), and say what to run.
 
 ### First trust
 
 Set git's own guard against bare repositories planted in subdirectories; it
-works with or without gitguard:
+works with or without gitwary:
 
 ```sh
 git config --global safe.bareRepository explicit
@@ -252,10 +252,10 @@ point is that no state is blessed unseen, so there is no trust-on-first-use.
 
 ```sh
 cat .git/config; ls -la .git/hooks     # anything you did not put there?
-gitguard trust
+gitwary trust
 ```
 
-`gitguard list` shows every registered repository and its status. New
+`gitwary list` shows every registered repository and its status. New
 repositories need nothing: a successful `git clone` / `git init` through the
 wrapper is trusted automatically (unless a template directory is involved,
 or the target already held a gitdir, in which case it says so).
@@ -266,7 +266,7 @@ Commit, checkout, merge, rebase, stash, bisect and gc touch only volatile
 files: nothing to do. `submodule add` and `submodule update --init` write
 to the gitdir: the next command in the superproject asks once (typed in
 the new submodule first, it is refused and names the superproject). `git
-worktree add`, `move`, `remove` and `prune` run through gitguard ask
+worktree add`, `move`, `remove` and `prune` run through gitwary ask
 nothing, in the main tree or in the other worktrees (a worktree created by
 another git, an IDE's bundled one, is asked about once). A submodule or a
 linked worktree needs no trust of its own: the first git run there takes
@@ -280,7 +280,7 @@ When a command finds the repository changed, one of three things happens.
 that run it first (lazygit, fugitive) took a refusal for an old git.
 
 **Auto-accept: the change is one git or your editor made itself.**
-gitguard re-trusts on its own, prints one line and runs git. See the next
+gitwary re-trusts on its own, prints one line and runs git. See the next
 subsection for the exact rule.
 
 **Anything else is shown and asked on the terminal.** A new remote, a hook,
@@ -294,19 +294,19 @@ The question is read on `/dev/tty`, so git's own stdin (`git apply <
 patch`) is untouched. The state recorded is the one you were shown, not
 whatever the sandbox may have written in the meantime. No question, a plain
 refusal, when stdout or stderr is not a terminal (a prompt's `$(git …)`,
-`git log | head`), or with `GITGUARD_NO_PROMPT=1`.
+`git log | head`), or with `GITWARY_NO_PROMPT=1`.
 
 **A git with no terminal waits for you.** An editor's polling, a build tool,
 cron: nobody reads their stderr. On a changed repository that git records
 what it saw, sends one desktop notification (`notify-send` on Linux,
 `osascript` on macOS, at most one per repository per 10 minutes) and waits
-up to `GITGUARD_WAIT` seconds (default 60; 0 = never) for your decision:
+up to `GITWARY_WAIT` seconds (default 60; 0 = never) for your decision:
 
 ```
-$ gitguard pending
+$ gitwary pending
 changed         4s  1 waiting  /home/user/work/api
-  gitguard pending <repo>   to see the diff and decide     -a: all
-$ gitguard pending ~/work/api
+  gitwary pending <repo>   to see the diff and decide     -a: all
+$ gitwary pending ~/work/api
 /home/user/work/api  [changed, since 6s]
     git waiting (pid 41250, 6s): code[40988] ← systemd[1]
       /usr/share/code/code --type=utility
@@ -314,19 +314,19 @@ $ gitguard pending ~/work/api
   added     hooks/pre-commit
 ────────────────────────────────────────────────────────
 Allow: record this state and let the waiting git run? [y/N] n
-! gitguard: refused: the waiting git is not run; the record is cleared. If malicious:  gitguard restore
+! gitwary: refused: the waiting git is not run; the record is cleared. If malicious:  gitwary restore
 ```
 
 Allowing records the state you were shown and lets the waiting git run.
-Refusing makes it fail; `gitguard restore` then puts the watched files back
+Refusing makes it fail; `gitwary restore` then puts the watched files back
 and you inspect the rest by hand. If the files changed again between the
 block and your review, the diff shown is the current one and says so. A
 decision taken after the timeout applies to the next invocation (editors
 poll again by themselves). A never-trusted repository or a structural
 anomaly is recorded and refused at once: nothing can be allowed there
-without `gitguard trust` after inspection.
+without `gitwary trust` after inspection.
 
-`gitguard trust` on a changed repository shows the same diff and asks the
+`gitwary trust` on a changed repository shows the same diff and asks the
 same way; in a script it prints the diff and records.
 
 ### Auto-accept
@@ -371,7 +371,7 @@ passes; anything else found changed there is refused at once.
 
 One more thing is accepted without a question, on other grounds: the two
 pointers `git worktree add`, `move`, `remove` and `prune` write under
-`.git/worktrees/`, when gitguard ran that command itself, in the main
+`.git/worktrees/`, when gitwary ran that command itself, in the main
 repository, on a state it had just found trusted, and nothing else moved
 meanwhile. The same files written by anything else are shown and asked.
 
@@ -406,16 +406,16 @@ Two settings of your own that keep asking, and what settles them:
   `cache`).
 - a global `includeIf "gitdir:~/work/"` whose file sets
   `init.templateDir`: no clone is trusted automatically any more, under
-  `~/work/` or elsewhere — gitguard does not evaluate the condition. Run
-  `gitguard trust` in the clone, as its message says.
+  `~/work/` or elsewhere — gitwary does not evaluate the condition. Run
+  `gitwary trust` in the clone, as its message says.
 
 Tried on Debian with the system-wide install, on a repository modified
 behind the user's back: starship, oh-my-zsh, fish and `__git_ps1` prompts
 go quiet with no delay (their git has the terminal: refused at once);
 powerlevel10k keeps showing branch and status, since `gitstatusd` reads
 `.git` directly and never runs git, which is harmless; lazygit exits with
-gitguard's message, tig says "Not a git repository"; fugitive's `:Git`
-shows the refusal after `GITGUARD_WAIT` (its first git is a job without a
+gitwary's message, tig says "Not a git repository"; fugitive's `:Git`
+shows the refusal after `GITWARY_WAIT` (its first git is a job without a
 terminal, which waits); pre-commit's hook runs with the real git, and the
 `pre-commit install` that rewrote the hook is what asks for a `trust`.
 
@@ -425,16 +425,16 @@ which has no `setsid`, Python's `start_new_session` does the same:
 
 ```sh
 cd ~/work/api && printf '#!/bin/sh\necho pwned\n' > .git/hooks/pre-commit
-GITGUARD_WAIT=300 python3 -c 'import subprocess, sys
+GITWARY_WAIT=300 python3 -c 'import subprocess, sys
 subprocess.run(sys.argv[1:], start_new_session=True, stdin=subprocess.DEVNULL,
                stdout=open("/tmp/git.log", "w"), stderr=subprocess.STDOUT)' git status &
-gitguard pending ~/work/api      # decide; then read /tmp/git.log
+gitwary pending ~/work/api      # decide; then read /tmp/git.log
 ```
 
-### After upgrading gitguard
+### After upgrading gitwary
 
-A new version may change what the fingerprint contains; `gitguard list`
-then shows the repositories as "legacy". `gitguard retrust` re-validates in
+A new version may change what the fingerprint contains; `gitwary list`
+then shows the repositories as "legacy". `gitwary retrust` re-validates in
 bulk the ones that are unchanged and skips the modified ones. Installed at
 the same path, the new version is what the exec path's `git` already
 links to; nothing else to redo.
@@ -448,10 +448,10 @@ has its own reference, named by the tree **and** the gitdir. Trust it the
 way you run it:
 
 ```sh
-GIT_DIR=~/.dotfiles.git GIT_WORK_TREE=~ gitguard trust
+GIT_DIR=~/.dotfiles.git GIT_WORK_TREE=~ gitwary trust
 ```
 
-`gitguard list` shows it with its gitdir; `forget` and `pending` take the
+`gitwary list` shows it with its gitdir; `forget` and `pending` take the
 tree (every repository on it) or the gitdir (that one). If you trusted
 such a repository with an earlier version, trust it once more: its
 reference was filed under the directory alone, shared by every
@@ -461,34 +461,34 @@ repository using that directory.
 
 | Command | What it does |
 |---|---|
-| `gitguard` | Check the current repository. Exit 1 if suspect or never trusted. |
-| `gitguard trust` | Record the current state as the reference, with a backup of the watched files. Shows the diff first if the repository changed. |
-| `gitguard diff` | Show what differs from the reference. |
-| `gitguard restore [-y]` | Put the watched files back into the reference state. |
-| `gitguard git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`, `-c`. |
-| `gitguard list` | Registered repositories and their status (ok / modified / structure / missing / legacy / unknown). |
-| `gitguard pending [<repo>… \| -a \| -c <repo>…]` | Decisions waiting for a git blocked by a program: list, review and allow/refuse, or clear. |
-| `gitguard forget <repo>…` / `--missing` | Remove entries; the repository becomes "never trusted" again. `<repo>` is its directory, or its gitdir when kept apart. |
-| `gitguard prune` | Same as `forget --missing`. |
-| `gitguard retrust` | Re-validate unchanged repositories after an upgrade. |
-| `gitguard version` | The version, which is the package's. |
-| `gitguard exec-path [<dir>]` | Build or rebuild an exec path whose `git` is gitguard, for `GIT_EXEC_PATH` (default `~/.local/lib/gitguard-exec`). |
+| `gitwary` | Check the current repository. Exit 1 if suspect or never trusted. |
+| `gitwary trust` | Record the current state as the reference, with a backup of the watched files. Shows the diff first if the repository changed. |
+| `gitwary diff` | Show what differs from the reference. |
+| `gitwary restore [-y]` | Put the watched files back into the reference state. |
+| `gitwary git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`, `-c`. |
+| `gitwary list` | Registered repositories and their status (ok / modified / structure / missing / legacy / unknown). |
+| `gitwary pending [<repo>… \| -a \| -c <repo>…]` | Decisions waiting for a git blocked by a program: list, review and allow/refuse, or clear. |
+| `gitwary forget <repo>…` / `--missing` | Remove entries; the repository becomes "never trusted" again. `<repo>` is its directory, or its gitdir when kept apart. |
+| `gitwary prune` | Same as `forget --missing`. |
+| `gitwary retrust` | Re-validate unchanged repositories after an upgrade. |
+| `gitwary version` | The version, which is the package's. |
+| `gitwary exec-path [<dir>]` | Build or rebuild an exec path whose `git` is gitwary, for `GIT_EXEC_PATH` (default `~/.local/lib/gitwary-exec`). |
 
-Management commands write to stdout (`gitguard list | grep modified`
+Management commands write to stdout (`gitwary list | grep modified`
 works); refusals and diagnostics go to stderr.
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
-| `GITGUARD_STATE` | State directory (default `$XDG_STATE_HOME/gitguard`, i.e. `~/.local/state/gitguard`). Never inside a mounted volume. |
-| `GITGUARD_REAL_GIT` | Path to the real git (default: a `git.real` next to gitguard, else the first `git` in the PATH that is not gitguard itself). Changing the real git changes its system config, hence the fingerprint: one `trust`. |
-| `GITGUARD_ALLOW_REBASE_EXEC=1` | Allow `exec` lines in rebase todo files, and a merge strategy that is not one of git's builtins (`rebase-merge/strategy`, `sequencer/opts`). |
-| `GITGUARD_NO_PROMPT=1` | Never ask on the terminal; refuse directly. |
-| `GITGUARD_WAIT` | Seconds a git without a terminal waits for `gitguard pending` (default 60, 0 = never). |
-| `GITGUARD_NO_NOTIFY=1` | No desktop notification. |
-| `GITGUARD_KEEP_FSMONITOR=1` | Do not pin `core.fsmonitor=false` on the git gitguard runs. By default gitguard appends it to `GIT_CONFIG_PARAMETERS`, which outranks every repository's own config: a repository planted in the work tree that git reads in-process (an active submodule, `git grep --recurse-submodules <rev>`) cannot run its fsmonitor hook. Set this to keep a fsmonitor hook or daemon of your own; `trust` then warns when a `submodule.active` pathspec makes that reading possible. |
-| `GITGUARD_DEBUG=1` | Full traceback on internal errors (otherwise a one-line message, exit 1, git not run). |
+| `GITWARY_STATE` | State directory (default `$XDG_STATE_HOME/gitwary`, i.e. `~/.local/state/gitwary`). Never inside a mounted volume. |
+| `GITWARY_REAL_GIT` | Path to the real git (default: a `git.real` next to gitwary, else the first `git` in the PATH that is not gitwary itself). Changing the real git changes its system config, hence the fingerprint: one `trust`. |
+| `GITWARY_ALLOW_REBASE_EXEC=1` | Allow `exec` lines in rebase todo files, and a merge strategy that is not one of git's builtins (`rebase-merge/strategy`, `sequencer/opts`). |
+| `GITWARY_NO_PROMPT=1` | Never ask on the terminal; refuse directly. |
+| `GITWARY_WAIT` | Seconds a git without a terminal waits for `gitwary pending` (default 60, 0 = never). |
+| `GITWARY_NO_NOTIFY=1` | No desktop notification. |
+| `GITWARY_KEEP_FSMONITOR=1` | Do not pin `core.fsmonitor=false` on the git gitwary runs. By default gitwary appends it to `GIT_CONFIG_PARAMETERS`, which outranks every repository's own config: a repository planted in the work tree that git reads in-process (an active submodule, `git grep --recurse-submodules <rev>`) cannot run its fsmonitor hook. Set this to keep a fsmonitor hook or daemon of your own; `trust` then warns when a `submodule.active` pathspec makes that reading possible. |
+| `GITWARY_DEBUG=1` | Full traceback on internal errors (otherwise a one-line message, exit 1, git not run). |
 | `NO_COLOR` | Disable colours. |
 
 Git's own `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`,
@@ -506,7 +506,7 @@ refused (git itself reads it against two different directories in one run).
 - It cannot close the race between its check and git's execution if the
   sandbox is still writing. Stop the sandbox before running git on the host.
 - It is no substitute for an up-to-date git. A repository you clone that
-  exploits a bug of git itself acts inside the git you ran, where gitguard
+  exploits a bug of git itself acts inside the git you ran, where gitwary
   sees nothing.
 - `restore` only cleans the pivot vector: objects, commits and tree files
   dropped by the sandbox stay there for you to inspect. It never writes
@@ -515,17 +515,17 @@ refused (git itself reads it against two different directories in one run).
 - Hooks tracked *in the tree* under `core.hooksPath` (husky, `.githooks`)
   are watched, but a `checkout`/`merge`/`pull` of a commit the sandbox
   created rewrites them after the check, and git runs the new version in
-  the same command. `gitguard trust` warns when that layout is in place;
+  the same command. `gitwary trust` warns when that layout is in place;
   review incoming changes to those files.
 - The `[y/N]` question needs stdout and stderr on a terminal. A shell
   prompt's `$(git …)` or a `git log | head` on a changed repository is
-  refused, not asked: rerun without the pipe, or `gitguard trust`.
+  refused, not asked: rerun without the pipe, or `gitwary trust`.
 - No desktop notification without a session (ssh, cron, systemd): the
   pending record is still written and the wait still times out; check
-  `gitguard pending` by hand.
+  `gitwary pending` by hand.
 - Your global config is read for the paths it names, not fingerprinted: a
   `git config --global` that names no file (an alias, a pager) is not seen.
-  Whoever could write it could write gitguard's state directory too.
+  Whoever could write it could write gitwary's state directory too.
 - Bare repositories are refused, not managed. `core.splitIndex` is refused
   (the gitlinks it needs to read live in `sharedindex.*`).
 - Parity with git is checked against git itself in `tests/test_git_parity.py`;
@@ -543,15 +543,15 @@ python3 -m pytest
 ```
 
 Needs `pytest` and `git`; `git` is the first one of the `PATH` that is not
-gitguard, or `GITGUARD_REAL_GIT`. The suite replays a corpus of attacks against a
+gitwary, or `GITWARY_REAL_GIT`. The suite replays a corpus of attacks against a
 trusted repository and checks that each one is refused, that ordinary git
 operations are not, and that everything git reads (config syntax, includes,
-discovery, index gitlinks) gitguard reads the same way, with git as the
+discovery, index gitlinks) gitwary reads the same way, with git as the
 oracle.
 
 ### Supported versions
 
-gitguard reads a repository the way git does, and each of its readers is
+gitwary reads a repository the way git does, and each of its readers is
 held to git by the suite: a git is supported when the whole suite passes
 against it. Every push runs it (`.github/workflows/tests.yml`) on Linux
 and macOS against git 2.39, 2.43, 2.47, 2.50 and 2.56, built from
@@ -560,7 +560,7 @@ and Ubuntu 26.04 with the distribution's own git and python; and once on
 Python 3.9. On the same four distributions it builds the package and
 replays its life against the distribution's git (`ci/test-deb.sh`).
 
-gitguard never asks git its version. Where two supported gits read one
+gitwary never asks git its version. Where two supported gits read one
 file two ways — a tab between two words of a config value is a space
 before 2.45 — it watches what either reads. A git older than 2.39 is not
 supported, and one newer than 2.56 is not known until its inventory is

@@ -1,8 +1,8 @@
-"""Every attack pattern in tests/attacks/ must be refused by gitguard.
+"""Every attack pattern in tests/attacks/ must be refused by gitwary.
 
 Properties checked for each:
-1. ``gitguard`` alone refuses (exit != 0);
-2. ``gitguard git status`` does not run git;
+1. ``gitwary`` alone refuses (exit != 0);
+2. ``gitwary git status`` does not run git;
 3. the repository was not already alerting before the attack (otherwise the
    test proves nothing) — guaranteed by the fixture, re-checked here.
 
@@ -20,12 +20,12 @@ from pathlib import Path
 import pytest
 
 from tests import attacks
-from tests.conftest import GG
+from tests.conftest import GW
 
 ATTACKS = attacks.collect()
 
 # Attacks not visible before the gitlink (no walk of the tree): what the
-# user does next, and from where gitguard must then refuse.
+# user does next, and from where gitwary must then refuse.
 # Traps in a sequence's files (todo, strategy, sequencer opts): read only by
 # a command that can resume the sequence ([147]). The plain check still
 # refuses; the resuming command must be refused, an ordinary one may run.
@@ -71,46 +71,46 @@ OPEN = {
 }
 
 
-def assert_blocked_now(gg: GG, cwd: Path, needle: str | None = None) -> None:
-    r = gg.check(cwd)
+def assert_blocked_now(gw: GW, cwd: Path, needle: str | None = None) -> None:
+    r = gw.check(cwd)
     assert r.blocked, f"attack accepted!\n{r.text}"
-    assert "gitguard:" in r.err
+    assert "gitwary:" in r.err
     if needle:
         assert needle in r.err, r.text
-    r2 = gg.run("git", "status", cwd=cwd)
+    r2 = gw.run("git", "status", cwd=cwd)
     assert r2.blocked and "On branch" not in r2.out, "git ran despite the attack"
 
 
 @pytest.mark.parametrize("fn", [
     pytest.param(fn, marks=pytest.mark.xfail(strict=True, reason=OPEN[fn.__name__]))
     if fn.__name__ in OPEN else fn for _, fn in ATTACKS], ids=[a[0] for a in ATTACKS])
-def test_attack_is_blocked(gg: GG, repo: Path, tmp_path: Path, fn) -> None:
-    assert not gg.check(repo).blocked, "the starting repository must be clean"
-    fn(gg, repo, tmp_path)
+def test_attack_is_blocked(gw: GW, repo: Path, tmp_path: Path, fn) -> None:
+    assert not gw.check(repo).blocked, "the starting repository must be clean"
+    fn(gw, repo, tmp_path)
     resume = RESUME.get(fn.__name__)
     if resume is not None:
-        r = gg.check(repo)
-        assert r.blocked and "gitguard:" in r.err, f"attack accepted!\n{r.text}"
-        r2 = gg.run("git", *resume, cwd=repo)
-        assert r2.blocked and "gitguard:" in r2.err, f"the resuming command ran\n{r2.text}"
+        r = gw.check(repo)
+        assert r.blocked and "gitwary:" in r.err, f"attack accepted!\n{r.text}"
+        r2 = gw.run("git", *resume, cwd=repo)
+        assert r2.blocked and "gitwary:" in r2.err, f"the resuming command ran\n{r2.text}"
         return
     planted = NO_INHERIT.get(fn.__name__)
     if planted is not None:
-        assert not gg.check(repo).blocked          # nothing of the repository changed
-        assert_blocked_now(gg, repo / planted)
-        assert "trusted with" not in gg.check(repo / planted).err
+        assert not gw.check(repo).blocked          # nothing of the repository changed
+        assert_blocked_now(gw, repo / planted)
+        assert "trusted with" not in gw.check(repo / planted).err
         return
     deferred = DEFERRED.get(fn.__name__)
     if deferred is None:
-        assert_blocked_now(gg, repo)
+        assert_blocked_now(gw, repo)
         return
     kind, arg = deferred
     if kind == "add":
-        assert not gg.check(repo).blocked          # no early warning…
-        assert gg.git("add", "-A", cwd=repo).rc == 0
-        assert_blocked_now(gg, repo, "nested repository")   # …refused once the gitlink exists
+        assert not gw.check(repo).blocked          # no early warning…
+        assert gw.git("add", "-A", cwd=repo).rc == 0
+        assert_blocked_now(gw, repo, "nested repository")   # …refused once the gitlink exists
     else:
-        assert_blocked_now(gg, repo / arg, "bare gitdir")
+        assert_blocked_now(gw, repo / arg, "bare gitdir")
 
 
 def test_deferred_list_matches_corpus() -> None:
@@ -127,7 +127,7 @@ def test_corpus_is_not_empty() -> None:
 
 def test_catalogue_cross_references() -> None:
     """The rule "a flaw is a test first" checked mechanically: every `[n]`
-    cited in gitguard.py or in a test exists in the catalogue of
+    cited in gitwary.py or in a test exists in the catalogue of
     tests/attacks/__init__.py, and every catalogue entry is cited by at
     least one test. The lookbehind leaves out indexing (`argv[0]`, `x)[0]`,
     `x][0]`) and the `3[1236]` of a regex; a `[0]` is a list literal."""
@@ -141,7 +141,7 @@ def test_catalogue_cross_references() -> None:
     def cited(p: Path) -> set[int]:
         return {int(n) for n in cite.findall(p.read_text(encoding="utf-8")) if int(n) > 0}   # `[0]`: a list
 
-    code = cited(root / "gitguard.py")
+    code = cited(root / "gitwary.py")
     tests: set[int] = set()
     for p in root.glob("tests/**/*.py"):
         if p != catalogue_file:

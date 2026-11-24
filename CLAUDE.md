@@ -1,11 +1,11 @@
-# gitguard
+# gitwary
 
-`gitguard.py` is the whole program: one file, Python 3 stdlib only, Linux
+`gitwary.py` is the whole program: one file, Python 3 stdlib only, Linux
 and macOS. A guard that refuses to run `git` on a repository whose trusted
 files (`.git/config`, hooks, attributes, alternates, nested gitdirs…) have
 changed since the user last validated them. Threat: untrusted code in a
 sandbox with the repository mounted writes into `.git/`; the next `git` on
-the host runs it. gitguard is detection; `safe.bareRepository=explicit` and
+the host runs it. gitwary is detection; `safe.bareRepository=explicit` and
 a global `core.hooksPath` are the prevention layers it assumes.
 
 **`DESIGN.md` is the design record** (threat model, every check and why,
@@ -15,7 +15,7 @@ paid for by a bypass.
 
 ## Rules that are not up for discussion
 
-- **A fingerprint, never a blocklist.** gitguard hashes everything in the
+- **A fingerprint, never a blocklist.** gitwary hashes everything in the
   gitdir and excludes only what git rewrites (`VOLATILE_*`). On a false
   positive, add to the exclusion list; never go back to an inclusion list,
   never add a "known dangerous keys" list. The closed lists, each entry
@@ -30,16 +30,16 @@ paid for by a bypass.
   run a todo line, [147]), the two ways out let through a structural
   refusal (`_repairs_split_index` [148], `_absorbs_nested` [149]) and
   `WORKTREE_WRITES` (the `git worktree` subcommands whose own two
-  pointers are accepted after gitguard ran them, [155]). The exclusion lists
+  pointers are accepted after gitwary ran them, [155]). The exclusion lists
   (`DATA_KEYS`, `VALUE_KEYS`) are mechanical where they can be:
   `VALUE_KEYS` is the `[bool]`/`[int]` sections of the inventory, taken
   from git's source, never curated ([129]); a string key stays under the
   generic rule, documented as a cost.
 - **Never run git to learn about a repository.** Discovery, config, gitfile,
-  index, todo files: all read by gitguard's own ports of git's readers
+  index, todo files: all read by gitwary's own ports of git's readers
   (`find_root`, `parse_git_config`, `index_gitlinks`, `_read_path_file`…).
   `git rev-parse`/`git config` would honour the config being judged. The
-  one git gitguard runs to learn anything is `git_prefix` ([128]): a
+  one git gitwary runs to learn anything is `git_prefix` ([128]): a
   constant of the binary, asked from `/` with no repository, no user
   config and no GIT_* variable — never anything about a repository.
 - **Read every file exactly as git does.** Bytes, git's `isspace`, one
@@ -48,7 +48,7 @@ paid for by a bypass.
   the oracle (`tests/test_git_parity.py`) and a byte-variant loop. As
   every supported git does (2.39 to 2.56, the CI matrix): where two of
   them read one file two ways, both readings are watched ([152]), and
-  gitguard never asks git its version.
+  gitwary never asks git its version.
 - **Fail closed.** Unreadable directory, unparsable config, unknown global
   option, internal error: refuse, git does not run.
 - **The state blessed is the state shown.** `save_trust` receives the
@@ -59,7 +59,7 @@ paid for by a bypass.
   caller must remember.
 - **No walk of the work tree**; the index gitlink is the barrier, and a
   repository git enters during a command is judged by the child git that
-  enters it: gitguard at the exec path, the install this assumes
+  enters it: gitwary at the exec path, the install this assumes
   (`DESIGN.md`, "Nested repositories"; `DESIGN-exec-path.md`). Never guess
   from the parent which commands enter.
 - **The state directory stays outside the repository.**
@@ -88,7 +88,7 @@ paid for by a bypass.
 - **A directory is watched only for keys git reads it from** (`DIR_KEYS`);
   one that contains the repository, at depth 1 only;
   a file is not watched for keys git reads as data (`DATA_KEYS`).
-- Only what every command needs is imported at the top of `gitguard.py`
+- Only what every command needs is imported at the top of `gitwary.py`
   (each import is paid by every `git`); trust/restore/pending modules are
   imported where used.
 - Example user name in code and tests is `user`; no personal name anywhere
@@ -97,26 +97,26 @@ paid for by a bypass.
 ## Commands
 
 ```
-gitguard                 check; exit 1 if suspect or never trusted
-gitguard trust | diff | restore [-y]
-gitguard git <args>      check, then exec the real git (symlink `git → gitguard`
-                         switches to this mode); clone/init auto-trust; branch
-                         tracking auto-accepted; other changes: diff + [y/N] on /dev/tty
-gitguard list | forget <repo>… | --missing | prune | retrust
-gitguard pending [<repo>… | -a | -c <repo>…]   decisions of terminal-less gits
-gitguard exec-path [<dir>]   (re)build an exec path whose git is gitguard (macOS, no root)
-gitguard version             VERSION, read by ci/build-deb.sh
+gitwary                 check; exit 1 if suspect or never trusted
+gitwary trust | diff | restore [-y]
+gitwary git <args>      check, then exec the real git (symlink `git → gitwary`
+                        switches to this mode); clone/init auto-trust; branch
+                        tracking auto-accepted; other changes: diff + [y/N] on /dev/tty
+gitwary list | forget <repo>… | --missing | prune | retrust
+gitwary pending [<repo>… | -a | -c <repo>…]   decisions of terminal-less gits
+gitwary exec-path [<dir>]   (re)build an exec path whose git is gitwary (macOS, no root)
+gitwary version             VERSION, read by ci/build-deb.sh
 ```
 
 The Debian/Ubuntu package (`packaging/deb/`: control, `preinst` adds the
 two diversions, `postrm` removes them) is built by `ci/build-deb.sh` and
 its life replayed by `ci/test-deb.sh`, as root in a throwaway container
-only: `GITGUARD_DEB_TEST=throwaway`, it installs and removes git.
+only: `GITWARY_DEB_TEST=throwaway`, it installs and removes git.
 
-Environment: `GITGUARD_STATE`, `GITGUARD_REAL_GIT`, `GITGUARD_ALLOW_REBASE_EXEC`,
-`GITGUARD_NO_PROMPT`, `GITGUARD_WAIT`, `GITGUARD_NO_NOTIFY`, `GITGUARD_KEEP_FSMONITOR`,
-`GITGUARD_DEBUG`,
-`GITGUARD_JUDGED` (set by gitguard for the git it runs, read by child gits),
+Environment: `GITWARY_STATE`, `GITWARY_REAL_GIT`, `GITWARY_ALLOW_REBASE_EXEC`,
+`GITWARY_NO_PROMPT`, `GITWARY_WAIT`, `GITWARY_NO_NOTIFY`, `GITWARY_KEEP_FSMONITOR`,
+`GITWARY_DEBUG`,
+`GITWARY_JUDGED` (set by gitwary for the git it runs, read by child gits),
 `NO_COLOR`; git's own `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
 `GIT_INDEX_FILE`, `GIT_CEILING_DIRECTORIES`, `GIT_CONFIG_*`, `GIT_TEMPLATE_DIR`
 are honoured as git honours them.
@@ -130,12 +130,12 @@ are honoured as git honours them.
 | what is hashed in the gitdir | `walk_gitdir`, `_child_root`, `_volatile_*`, `VOLATILE_DIRS`, `VOLATILE_FILES` (paths relative to a gitdir root) | What the fingerprint watches in the gitdir |
 | paths the config makes git read | `ConfigScan` (`add`, `consider`, `run`), `config_refs`, `DIR_KEYS`, `DATA_KEYS`, `global_config_files`, `iter_global_config`, `env_config` | What the fingerprint watches outside the gitdir |
 | a repository git borrows objects from (`--reference`, alternates): its config watched, its child covered | `alternate_repos`, `alternate_object_dirs`, `_alternates_entries`, `_borrowed`, `ConfigScan.run`, `Judged.covers` | same, "A repository git borrows objects from"; Nested repositories |
-| the check pipeline (scan → structure → fingerprint) | `inspect`, `Inspection`, `save_trust` | Organization of gitguard.py |
+| the check pipeline (scan → structure → fingerprint) | `inspect`, `Inspection`, `save_trust` | Organization of gitwary.py |
 | config parser | `_Src`, `_parse_value`, `parse_git_config` | same, "Config files parsed" |
 | output, colours, `san` | `san`, `Style`, `set_output` | Display and sanitization |
 | state files, keys, locking; a gitdir named apart from its tree (GIT_DIR: vcsh, dotfiles) is half of the key and of the records ([157]) | `save_trust`, `load_manifest`, `update_pending`, `state_key`, `gitdir_apart`, `Repo.key`/`title`/`dotgit`, `open_record`, `records_at` | Storage; What the script checks, 1 |
 | a submodule, a linked worktree trusted with the repository holding its gitdir, again when its reference no longer matches; what its refusal says of that repository | `trust_holder`, `_holder`, `holder_unsettled`, `REPO_ENV` | Trusted with the repository that holds the gitdir |
-| the pointers of a `git worktree` command gitguard ran | `WORKTREE_WRITES`, `worktree_pointers`, `accept_worktree_pointers`, `run_git` | Exec-mode shortcuts |
+| the pointers of a `git worktree` command gitwary ran | `WORKTREE_WRITES`, `worktree_pointers`, `accept_worktree_pointers`, `run_git` | Exec-mode shortcuts |
 | exec mode: options, clone/init, prompt, pending | `split_global_options`, `parse_new_repo`, `check_or_die`, `ask_on_tty`, `wait_for_decision` | Auto-trust; Exec-mode shortcuts |
 | passthroughs that read no repository | `TRANSPORT`, `main` | Which git runs |
 | child gits: the marker (pid + start + judged gitdir/common/root/label), coverage by `gitdir_roots` and `tree_named`, `new`, the served repository, no detach, the exec-path wrap, its check and its macOS shim | `Judged`, `_ancestors`, `_proc_lineage`, `read_judged`, `set_judged`, `NewRepo`, `_served_repository`, `keep_attached`, `check_wrap`, `cmd_exec_path`, `PATH_QUERIES`, `run_git` | Nested repositories; DESIGN-exec-path.md |
@@ -157,7 +157,7 @@ any change. pytest is not on the system python: `python3 -m venv <scratch>/venv
 - `tests/test_git_parity.py` — git as the oracle for every reader; a known
   gap is `xfail(strict=True)`, promoted to `tests/attacks/` once fixed.
 - `tests/test_claims.py` — every closed list of claims about git in
-  gitguard.py (`GLOBAL_FLAGS`, `NEW_REPO_OPTIONS`, `PATH_QUERIES`, index
+  gitwary.py (`GLOBAL_FLAGS`, `NEW_REPO_OPTIONS`, `PATH_QUERIES`, index
   extensions) held to git as the oracle, and the child-process barrier
   (git enters a submodule through a child; the in-process entries and the
   activation they need); a new list gets its test there.
@@ -169,9 +169,9 @@ any change. pytest is not on the system python: `python3 -m venv <scratch>/venv
 - `tests/test_commands.py`, `test_nested.py`, `test_prompt.py` (pty),
   `test_pending.py`, `test_unit.py`.
 - The scenarios use `REAL_GIT` (conftest) with a **raw** exec path
-  (`gg.git`, `gg.raw_env`); the checks run with a **wrapped** one
-  (`gg.env`: `GIT_EXEC_PATH` whose `git` is gitguard), as on a machine
-  where the exec path is diverted. On a machine where `git` *is* gitguard,
+  (`gw.git`, `gw.raw_env`); the checks run with a **wrapped** one
+  (`gw.env`: `GIT_EXEC_PATH` whose `git` is gitwary), as on a machine
+  where the exec path is diverted. On a machine where `git` *is* gitwary,
   the suite still works.
 
 Any new vector or false positive becomes a test first. Replay every
