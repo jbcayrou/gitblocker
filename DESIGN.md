@@ -838,6 +838,23 @@ preserved (intended in messages; in a file name it is already refused by
 `hooksPath = .githooks<CR>x = y`, one value for git, showed as two clean
 lines before `[y/N]` ([53]).
 
+**What a question shows of a config** (`show_changes`, [168]). After the
+list of entries, the readable diff of every config git reads under a
+gitdir root that changed: `config` and `config.worktree` of the judged
+gitdir, of the main repository from a linked worktree, and of the roots
+nested there — a submodule's `modules/<x>/config`, a linked worktree's
+`worktrees/<id>/config.worktree` — from the copy kept with the reference;
+a config that was not there is shown whole. Only the judged gitdir's own
+`config` used to be: seen from the superproject, a change of a submodule's
+config was the one line `modified modules/sub/config`, the same for a
+branch the user created there and for a `filter.x.clean` the sandbox
+added, which a `y` given out of habit blessed and every later `git status`
+of the superproject ran. "The state blessed is the state shown" is about
+what the user can read, not about what was hashed. Not shown yet: the one
+line of a worktree pointer (`worktrees/<id>/gitdir`), and the config of a
+repository outside the gitdir — a local remote, a repository borrowed from
+— which is hashed and never copied (`ext`).
+
 History: the first version filtered everything in `err()` and printed
 `?[31m`; the second had a `raw=True` flag to set by hand, forgotten on the
 "never trusted" message. Do not reintroduce a mechanism where the caller has
@@ -1024,17 +1041,53 @@ once the question it raises there is answered; one gitguard ran itself has
 it there already (next section, [155]). The cost is one inspection of the
 holder, paid once per tree, on the path that used to refuse.
 
+**Asked again when the tree's reference no longer matches** ([165]). That
+reference is a copy of files the holder's reference holds too — for a
+linked worktree the whole common dir, the other worktrees' pointers
+included — and whatever the holder's took afterwards was a change in every
+tree that had its copy: `git worktree add`, `move`, `remove`, accepted in
+the main tree (next section), then refused in each other worktree in use —
+for an agent with no terminal a wait and a refusal, and the `gitguard
+restore` the refusal names deleted the pointers of the worktree just
+created; the hooks husky generates in a worktree *after* its first git
+command (its own `git config`), the bytes trusted at the same place in the
+main tree; a change of a submodule the user had answered in the
+superproject, asked a second time by the submodule. The three conditions
+above do not depend on the tree's reference: they are asked whenever a
+tree with a holder differs from it, before any question, and the reference
+is the cache of their last answer. Given up: an entry only the tree's own
+reference held — a hook that exists in one worktree, trusted there by hand
+— that goes missing was shown as "removed", and is now a tree the holder
+covers, taken with one line; rewritten instead, it is in nobody's
+reference and is refused (both recorded in `tests/test_nested.py`). Option
+left out: no reference at all for such a tree, the holder checked at every
+command — nothing to keep in step, and every git run in a worktree or a
+submodule pays a second inspection.
+
+**What the refusal says** ([167]). A tree nobody trusted whose holder is
+not in its trusted state takes nothing, and "never trusted … Inspect
+.git/config and .git/hooks, then: gitguard trust" sent the user to bless it
+blind — after a `git submodule update --init` typed a moment before, when
+one command in the superproject asks the question and the submodule then
+takes its trust. The refusal names the holder and says which it is,
+changed since its last trust or never trusted either (`holder_unsettled`).
+Only then: a tree a trusted holder does not cover (a gitfile planted in
+another directory) has nothing to settle there and keeps the plain
+message — the first version of this message told it otherwise.
+
 ## Exec-mode shortcuts: auto-accept, prompt, pending
 
 When `gitguard git …` finds a deviation from the reference, three shortcuts
-before refusing (`check_or_die`, `interactive=True` only in exec mode;
-`gitguard` alone remains a diagnostic that reports):
+before refusing (`check_or_die`; in exec mode only, `gitguard` alone
+remains a diagnostic that reports — the first for every git, `accept`, the
+other two for a git that is not the child of another, `interactive`):
 
 1. **Auto-accept of branch tracking** (`auto_accept` →
-   `branch_tracking_only`, pure and tested). If the only deviation is
-   `config` (of the gitdir, or of the main repository from a linked worktree:
-   scope `common`) and the **semantic** difference between the old `config`
-   (backup `<key>.d/<scope>/config`) and the new one is limited to
+   `branch_tracking_only`, pure and tested). If every deviation is the
+   `config` of a gitdir root (the gitdir's; the main repository's from a
+   linked worktree, scope `common`; a submodule's, `modules/<x>/config`) and
+   the **semantic** difference between the old `config` (backup
+   `<key>.d/<scope>/<path>`) and the new one is, for each, limited to
    additions/removals of `branch.<x>.remote` (value = a remote already
    present in the reference, or `.`) and `branch.<x>.merge` (value
    `refs/heads/…`), gitguard re-trusts on its own, prints one line and runs
@@ -1049,7 +1102,22 @@ before refusing (`check_or_die`, `interactive=True` only in exec mode;
    `remote add` writes ([145]): pre-commit installs its hook repositories
    with `init --template=`, `remote add`, `fetch` from a hook with no
    terminal, and the fetch was refused on the config the `remote add` had
-   just written. `_network_url` accepts only a URL git drives itself
+   just written. Those three run inside the first `git commit`, children
+   of the git that runs the hook: **a child git applies the list too**, in
+   a repository its marker does not cover ([164]). A child neither asks
+   nor waits because it shares its parent's terminal and nobody waits on
+   it; the list touches no terminal, and left out with the rest it made
+   every commit of a pre-commit user fail until `pre-commit install-hooks`
+   was typed in a shell (replayed with pre-commit 4.7.0 — [145]'s own
+   test ran the three as siblings with no marker). **A submodule's
+   config** ([166]): `checkout -b feat origin/main` typed in a submodule
+   writes the tracking in `modules/<x>/config`; accepted from the
+   submodule, where the file is `config`, it was asked from the
+   superproject, where the same bytes are a nested file — at every branch
+   created in a submodule. The same list for the same file, whichever of
+   the two reads it first, and for several configs at once, each moved by
+   the list alone; the line printed names the root (`branch tracking for
+   feat in modules/sub`). `_network_url` accepts only a URL git drives itself
    (`http(s)://`, `ftp(s)://`, `git://`, `ssh://`, the scp form); a local
    path or `file://` makes git run that repository's hooks and must enter
    the watch ([45] [61]), `<helper>::` and any other scheme run a
@@ -1087,7 +1155,9 @@ before refusing (`check_or_die`, `interactive=True` only in exec mode;
    gitfile of another repository's worktree, outside the volume, to the
    planted gitdir. Not from a linked worktree (the pointers land under
    two references, this worktree's and the main tree's), nor for an
-   alias or a child git: asked at the next command, as before.
+   alias or a child git: asked at the next command, as before. The other
+   worktrees in use follow the main tree's reference ([165], previous
+   section).
 2. **Question on the terminal** (`ask_on_tty`): the diff is shown as before,
    then "Trust this state and run git? [y/N]". Read and written on
    **`/dev/tty`**, never on stdin: git will consume stdin (`apply < patch`,
@@ -1408,7 +1478,7 @@ read) and python 3.9 is not offered — the Linux runner is named
 (`ubuntu-24.04`), and Ubuntu 26.04 is tested with its own git. A new git
 enters the matrix with its inventory.
 
-**`python3 -m pytest`** (~1780 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
+**`python3 -m pytest`** (~1810 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
 [160], [161] — accepted limitations; ~410 s, ~70 s with `-n 8` on the command line),
 to run before any change:
 

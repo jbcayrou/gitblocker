@@ -3823,16 +3823,32 @@ def changes(old: dict, new: dict) -> list[tuple[str, tuple[str, str]]]:
 
 def show_changes(repo: Repo, old: dict, new: dict, key: Path) -> None:
     colors = {"removed": STYLE.red, "added": STYLE.green, "modified": STYLE.yellow}
-    for action, (scope, path) in changes(old, new):
+    ch = changes(old, new)
+    for action, (scope, path) in ch:
         err("  " + colors[action](f"{action:<9} {san(_label(scope, path))}"))
-    # Readable diff of the config: the gitdir's, and the main repository's
-    # when in a linked worktree (that is the one git reads).
-    for scope in ("local", "common") if repo.common != repo.gitdir else ("local",):
-        old_cfg = Path(str(key) + ".d") / scope / "config"
-        cfg = scope_base(repo, scope) / "config"
-        if old_cfg.is_file() and cfg.is_file() and old_cfg.read_bytes() != cfg.read_bytes():
+    # Readable diff of every config git reads under a gitdir root: the
+    # gitdir's own `config` and `config.worktree`, the main repository's
+    # when in a linked worktree, and those of the roots nested there — a
+    # submodule's `modules/<x>/config` is read by every git that enters the
+    # submodule. Shown as one line, `modified modules/sub/config`, the
+    # branch the user created in the submodule and a filter the sandbox
+    # added were the same question, and the `y` given to the first kind
+    # blessed the second. A config that was not there is shown whole. [168]
+    roots: dict[str, set[Path]] = {}
+    for action, (scope, path) in ch:
+        cfg = scope_base(repo, scope) / path
+        if action == "removed" or scope not in ("local", "common") \
+                or cfg.name not in ("config", "config.worktree") or not cfg.is_file():
+            continue
+        if scope not in roots:
+            roots[scope] = set(gitdir_roots(scope_base(repo, scope)))
+        if cfg.parent not in roots[scope]:
+            continue
+        old_cfg = Path(str(key) + ".d") / scope / path
+        was = old_cfg if action == "modified" and old_cfg.is_file() else None
+        if was is None or was.read_bytes() != cfg.read_bytes():
             err("\n  " + STYLE.bold(f"diff of {san(cfg)}:"))
-            _print_diff(old_cfg, cfg)
+            _print_diff(was, cfg)
 
 
 def _config_lines(p: Path) -> list[str]:
@@ -3848,9 +3864,11 @@ def _config_lines(p: Path) -> list[str]:
     return [l[:-1] if l.endswith("\r") else l for l in lines]
 
 
-def _print_diff(old_cfg: Path, cfg: Path) -> None:
+def _print_diff(old_cfg: Path | None, cfg: Path) -> None:
+    """The lines that changed between the trusted copy and the file; every
+    line of the file when there was no trusted copy (None)."""
     import difflib
-    a = _config_lines(old_cfg)
+    a = _config_lines(old_cfg) if old_cfg is not None else []
     b = _config_lines(cfg)
     for line in list(difflib.unified_diff(a, b, lineterm=""))[2:]:   # without ---/+++
         color = (STYLE.green if line.startswith("+") else STYLE.red if line.startswith("-")
@@ -4961,20 +4979,38 @@ def branch_tracking_only(old_items: list[tuple[str, str, str]],
 
 
 def auto_accept(repo: Repo, key: Path, old: Manifest, new: dict) -> list[str]:
-    """The only change is `config` (of the gitdir, or of the main repository
-    when in a linked worktree) and that `config` differs only by branch
-    tracking: return the branches, the caller re-trusts. Otherwise []."""
+    """Every change is the `config` of a gitdir root — the gitdir's, the
+    main repository's when in a linked worktree, a submodule's
+    (`modules/<x>/config`) — and each of those differs only by branch
+    tracking: return the branches (`<branch> in modules/<x>` for a nested
+    one), the caller re-trusts. Otherwise [].
+
+    A nested root's: `checkout -b feat origin/main` typed in a submodule
+    writes there. Accepted from the submodule, where the file is `config`,
+    it was asked from the superproject, where the same bytes are
+    `modules/<x>/config` — at every branch created in a submodule, a
+    refusal with no terminal. The same list, for the same file. [166]"""
     ch = changes(old.entries, new)
-    if len(ch) != 1 or ch[0][0] != "modified" or ch[0][1][1] != "config":
-        return []
-    scope = ch[0][1][0]
-    if scope not in ("local", "common"):
-        return []
-    old_cfg = Path(str(key) + ".d") / scope / "config"
-    if not old_cfg.is_file():
-        return []
-    return branch_tracking_only(parse_git_config(old_cfg),
-                                parse_git_config(scope_base(repo, scope) / "config"))
+    out: list[str] = []
+    roots: dict[str, set[Path]] = {}
+    for action, (scope, path) in ch:
+        if action != "modified" or scope not in ("local", "common"):
+            return []
+        base = scope_base(repo, scope)
+        cfg = base / path
+        if scope not in roots:
+            roots[scope] = set(gitdir_roots(base))
+        if cfg.name != "config" or cfg.parent not in roots[scope]:
+            return []
+        old_cfg = Path(str(key) + ".d") / scope / path
+        if not old_cfg.is_file():
+            return []
+        names = branch_tracking_only(parse_git_config(old_cfg), parse_git_config(cfg))
+        if not names:
+            return []
+        where = "" if cfg.parent == base else f" in {_label(scope, str(cfg.parent.relative_to(base)))}"
+        out += [n + where for n in names]
+    return out
 
 
 # `git worktree <sub>` that write a linked worktree's two pointers,
@@ -5126,16 +5162,63 @@ def can_ask() -> bool:
 REPO_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
 
 
+def _holder(repo: Repo) -> Repo | None:
+    """The repository whose `.git` holds this gitdir — a submodule's
+    `modules/<x>`, a linked worktree's `worktrees/<id>` — or None. Never
+    under REPO_ENV: the tree git works in is then not the one the gitdir
+    names ([72]). The nearest `.git` above the gitdir, nothing else."""
+    if any(os.environ.get(k) for k in REPO_ENV):
+        return None
+    top = next((a for a in repo.gitdir.parents if a.name == ".git"), None)
+    if top is None:
+        return None
+    try:
+        holder = open_repo(top.parent)
+    except (Refuse, OSError):            # a holder git refuses
+        return None
+    return holder if holder.gitdir == top else None
+
+
+def holder_unsettled(repo: Repo) -> str | None:
+    """What the refusal of a tree nobody trusted says of the repository
+    that holds its gitdir, when that one is itself not in its trusted
+    state: never trusted, or changed since. The tree then takes no trust
+    (trust_holder), and "never trusted … gitguard trust" sent the user to
+    bless it blind — after a `submodule update --init`, the question waits
+    in the superproject, where the command wrote. None when the holder is
+    in its trusted state: a tree it does not cover (a gitfile planted
+    elsewhere) has nothing to settle there, and is not told otherwise. [167]"""
+    holder = _holder(repo)
+    if holder is None:
+        return None
+    try:
+        old = load_manifest(holder.key)
+        if old is None:
+            return f"{holder.title}, never trusted either: inspect and trust that one"
+        if old.current and inspect(holder).new != old.entries:
+            return (f"{holder.title}, which has changed since its last trust: settle that first "
+                    f"(a git command there, or gitguard diff)")
+    except (Refuse, OSError):
+        pass
+    return None
+
+
 def trust_holder(insp: Inspection) -> Path | None:
-    """The repository whose trust a tree never trusted takes, or None: the
-    one whose `.git` holds its gitdir — a submodule's `modules/<x>`, a
-    linked worktree's `worktrees/<id>`. The user trusted every byte of
-    such a tree with that repository (its walk descends those roots,
+    """The repository whose trust a tree takes, or None: the one whose
+    `.git` holds its gitdir — a submodule's `modules/<x>`, a linked
+    worktree's `worktrees/<id>`. The user trusted every byte of such a
+    tree with that repository (its walk descends those roots,
     gitdir_roots; its scan reads their config against their tree, [39]
     [68] [125]), and a git run from the tree died "never trusted" all the
     same, until a `gitguard trust` in each submodule and each worktree.
     The marker's rule for a child git (Judged.covers), held to the
-    reference instead of to a live command. Taken when:
+    reference instead of to a live command.
+
+    Asked for a tree that has no reference, and for one whose reference
+    no longer matches ([165]): the reference a tree got here is a copy of
+    files the holder's holds too, and whatever the holder's took since —
+    the pointers of a `git worktree` command ([155]), a `y` — was a
+    change in every tree that had its copy. Taken when:
 
     - the holder is in its trusted state, checked now, as a command run
       there would: a file this tree's config named and that went missing
@@ -5151,20 +5234,20 @@ def trust_holder(insp: Inspection) -> Path | None:
       tree's own structure (`.gitmodules`, the gitfiles): named by
       nobody ([125]), checked by check_structure, which ran.
 
-    Never under REPO_ENV: the tree git works in is then not the one the
-    gitdir names ([72]). The nearest `.git` above the gitdir, nothing
-    else: a superproject with a separate gitdir, a submodule of a linked
-    worktree seen from that worktree are trusted by hand, as before. [154]"""
+    What this does not ask: that the tree's own reference, when it has
+    one, held nothing more. A file only that reference held — a hook of
+    one worktree, trusted there by hand — that goes missing leaves a tree
+    the holder covers: taken, where "removed" was shown. Rewritten, it is
+    in nobody's reference.
+
+    The holder is _holder's: a superproject with a separate gitdir, a
+    submodule of a linked worktree seen from that worktree are trusted by
+    hand, as before. [154]"""
     repo = insp.repo
-    if any(os.environ.get(k) for k in REPO_ENV):
-        return None
-    top = next((a for a in repo.gitdir.parents if a.name == ".git"), None)
-    if top is None:
+    holder = _holder(repo)
+    if holder is None:
         return None
     try:
-        holder = open_repo(top.parent)
-        if holder.gitdir != top:
-            return None
         old = load_manifest(holder.key)
         if old is None or not old.current or inspect(holder).new != old.entries:
             return None
@@ -5193,13 +5276,22 @@ def trust_holder(insp: Inspection) -> Path | None:
 
 
 def check_or_die(repo: Repo, key: Path, old: Manifest | None, new: dict,
-                 refs: list[tuple[str, Path]], interactive: bool = False) -> None:
-    """Refuse if the repository is not in the trusted state. In exec mode
-    (`interactive`), two shortcuts before refusing: auto-accept of a pure
-    branch-tracking addition, then a question on the terminal, diff shown,
-    default answer N. Never for "never trusted" (nothing to show: that would
-    bless an unknown state) nor for a structural refusal (raised earlier, in
-    check_structure)."""
+                 refs: list[tuple[str, Path]], interactive: bool = False,
+                 accept: bool = False) -> None:
+    """Refuse if the repository is not in the trusted state. In exec mode,
+    two shortcuts before refusing: auto-accept of a pure branch-tracking
+    addition (`accept`), then a question on the terminal, diff shown,
+    default answer N (`interactive`). Never for "never trusted" (nothing to
+    show: that would bless an unknown state) nor for a structural refusal
+    (raised earlier, in check_structure).
+
+    A child git is not `interactive`: it shares the parent's terminal,
+    which the parent git may be reading, and nobody is left waiting on it.
+    It does `accept`: the list is closed and asks nobody. pre-commit
+    builds the cache of a hook repository inside the first `git commit` —
+    `init`, `remote add <network url>`, `fetch`, three children — and the
+    fetch was refused on the remote its sibling had added, at every
+    commit, while the same three typed in a shell passed ([145]). [164]"""
     if old is None or not old.current:
         rule()
         why = "trusted by an older version" if old else "never trusted"
@@ -5208,13 +5300,16 @@ def check_or_die(repo: Repo, key: Path, old: Manifest | None, new: dict,
             raise Refuse(f"repository {why}: {repo.title}\n  Inspect its config and hooks, then:  "
                          + STYLE.cyan(f"GIT_DIR={shlex.quote(str(repo.gitdir))} "
                                       f"GIT_WORK_TREE={shlex.quote(str(repo.label))} gitguard trust"))
+        held = holder_unsettled(repo) if old is None else None
+        if held:
+            raise Refuse(f"repository {why}: {repo.title}\n  Its git directory is inside {held}.")
         raise Refuse(f"repository {why}: {repo.title}\n  Inspect .git/config and .git/hooks, then:  "
                      + STYLE.cyan("gitguard trust"))
     if old.entries == new:
         if pending_path(key).is_file():
             clear_pending(key)           # the state came back on its own
         return
-    if interactive:
+    if accept:
         accepted = auto_accept(repo, key, old, new)
         if accepted:
             save_trust(repo, refs, new)
@@ -5886,19 +5981,22 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
-        if old is None:
+        if old is None or (old.current and old.entries != new):
             # A submodule, a linked worktree: trusted with the repository
-            # that holds its gitdir, then judged under its own reference. [154]
+            # that holds its gitdir, then judged under its own reference
+            # ([154]) — a copy, taken again when it no longer matches ([165]).
             holder = trust_holder(insp)
             if holder is not None:
                 save_trust(repo, refs, new)
                 clear_pending(key)
                 info(f"trusted with {holder}: {repo.title}")
                 old = load_manifest(key)
-        # A child never asks, waits, auto-accepts or notifies: it shares the
-        # parent's terminal, which the parent git may be reading, and nobody
-        # is left waiting on it. It refuses at once and records.
-        check_or_die(repo, key, old, new, refs, interactive=(mode == "exec" and judged is None))
+        # A child never asks, waits or notifies: it shares the parent's
+        # terminal, which the parent git may be reading, and nobody is left
+        # waiting on it. It takes what the closed list takes ([164]), or
+        # refuses at once and records.
+        check_or_die(repo, key, old, new, refs, interactive=(mode == "exec" and judged is None),
+                     accept=(mode == "exec"))
     except Refuse as e:
         if mode == "exec" and not e.recorded and (judged is not None or not has_tty()):
             kind = "never" if old is None or not old.current else "structural"

@@ -276,8 +276,13 @@ whatever its value:
 - nothing is written to **stdout** (git parses the child's stdout:
   `status --porcelain=2`, `rev-parse`); exec mode already keeps its
   messages on stderr, the rule becomes a test;
-- **no auto-accept** of a branch-tracking change: a child writes no trust
-  state for a repository it judged.
+- **no question to answer, hence the closed list or nothing**: a change
+  the list accepts in a shell (branch tracking, a remote with a network
+  URL: `auto_accept`) is accepted by a child too, in a repository its
+  marker does not cover. The first version left it out with the question
+  and the wait, and pre-commit's first use of a hook repository — `init`,
+  `remote add <network url>`, `fetch`, three children of the first `git
+  commit` — failed at every commit ([164]).
 
 A child's **clone or init is the user's**: waited for, `new` marker set,
 auto-trusted ([107]: pre-commit's first-use `git init` in its cache, a

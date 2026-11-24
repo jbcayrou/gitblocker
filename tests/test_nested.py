@@ -383,3 +383,185 @@ def test_clone_gitdir_of_the_tree_control_that_git_runs_it(gg: GG, tmp_path: Pat
                        capture_output=True, text=True)
     assert (dst / "sub/.git").is_symlink() and mark.exists(), \
         f"git no longer runs the config of a gitdir its submodule's `.git` leads to: [163] may be moot\n{r.stderr}"
+
+
+# ------------------------------------------ [164] what a child git does not take
+# A git run by another git applies the closed list of accepted changes
+# (branch tracking, a remote with a network URL) in a repository its marker
+# does not cover, as a git typed in a shell does. Nothing else: it asks
+# nothing, waits for nobody, and refuses.
+@pytest.mark.parametrize("lines", [
+    '[remote "evil"]\n\turl = {vol}/evil\n\tfetch = +refs/heads/*:refs/remotes/evil/*\n',
+    '[remote "evil"]\n\turl = ext::sh -c "touch {mark}"\n',
+    '[alias]\n\tlog = !touch {mark}\n',
+    '[remote "up"]\n\turl = https://example.invalid/x.git\n[core]\n\tpager = touch {mark}\n',
+])
+def test_a_child_takes_nothing_beyond_the_closed_list(gg: GG, repo: Path, tmp_path: Path, lines: str) -> None:
+    """A trusted hook runs git in another repository, whose config the
+    sandbox rewrote: a local remote, a remote helper, an alias, a network
+    remote with a pager beside it."""
+    from tests.attacks._helpers import make_source
+    other, mark = make_source(gg, tmp_path, "other"), tmp_path / "RAN"
+    gg.trust(other)
+    write_exec(repo / ".git/hooks/pre-commit", "#!/bin/sh\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE "
+               f"GIT_PREFIX\ncd '{other}' && git log -1 --format=%s\n")
+    gg.trust(repo)
+    with open(other / ".git/config", "a") as f:
+        f.write(lines.format(vol=tmp_path, mark=mark))
+    (repo / "f").write_text("b\n")
+    r = gg.run("git", "commit", "-qam", "second", cwd=repo)
+    assert r.rc != 0 and "has changed" in r.err and "reference updated" not in r.err, r.text
+    assert not mark.exists(), f"the child ran the planted config\n{r.text}"
+    assert gg.check(other).blocked
+
+
+# --------------------------------------- [165] what a tree does not take back
+# A submodule or a linked worktree whose reference no longer matches takes
+# its holder's trust again on the terms of the first use ([154]): the
+# holder in its trusted state, every watched file of the tree in the
+# holder's reference. Each test is one way of not being there: the tree
+# is refused on its own reference, as before.
+def _worktree_in_use(gg: GG, repo: Path, tmp_path: Path) -> Path:
+    wt = tmp_path / "wt"
+    assert gg.run("git", "worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    r = gg.run("git", "status", "--short", cwd=wt)
+    assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+    return wt
+
+
+def _changed(gg: GG, tree: Path) -> None:
+    r = gg.run("git", "status", "--short", cwd=tree)
+    assert r.blocked and "has changed" in r.err and "trusted with" not in r.err, r.text
+
+
+def test_no_trust_taken_again_from_a_changed_main_tree(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """A hook planted in the common dir, a `config.worktree` planted for
+    the worktree: changes of the main tree, which is not in its trusted
+    state — the worktree shows them, nothing runs."""
+    wt, mark = _worktree_in_use(gg, repo, tmp_path), tmp_path / "RAN"
+    write_exec(repo / ".git/hooks/pre-commit", f"#!/bin/sh\ntouch '{mark}'\n")
+    _changed(gg, wt)
+    assert gg.run("git", "commit", "-q", "--allow-empty", "-m", "x", cwd=wt).blocked and not mark.exists()
+    (repo / ".git/hooks/pre-commit").unlink()
+    assert gg.run("git", "status", "--short", cwd=wt).rc == 0
+    gg.git("config", "extensions.worktreeConfig", "true", cwd=repo)
+    (repo / ".git/worktrees/wt/config.worktree").write_text(f"[core]\n\tfsmonitor = touch '{mark}'\n")
+    _changed(gg, wt)
+    assert not mark.exists()
+
+
+def test_no_trust_taken_again_for_a_file_the_main_tree_never_held(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """A relative `core.hooksPath` resolves in the worktree's own tree: a
+    hook rewritten or added there is in nobody's reference."""
+    gg.git("config", "core.hooksPath", ".githooks", cwd=repo)
+    write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
+    gg.git("add", "-A", cwd=repo)
+    gg.git("commit", "-qm", "hooks", cwd=repo)
+    (repo / ".githooks/pre-commit").unlink()
+    assert gg.git("checkout", "--", ".githooks", cwd=repo).rc == 0     # the mode git gives, in both trees
+    gg.trust(repo)
+    wt, mark = _worktree_in_use(gg, repo, tmp_path), tmp_path / "RAN"
+    hook = wt / ".githooks/pre-commit"
+    mode = hook.stat().st_mode
+    hook.write_text(f"#!/bin/sh\ntouch '{mark}'\n")
+    hook.chmod(mode)
+    _changed(gg, wt)
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(mode)
+    assert gg.run("git", "status", "--short", cwd=wt).rc == 0
+    write_exec(wt / ".githooks/post-checkout", f"#!/bin/sh\ntouch '{mark}'\n")
+    _changed(gg, wt)
+    assert not mark.exists()
+
+
+def test_an_entry_of_the_tree_alone_that_goes_missing_is_not_asked(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """The price of [165], recorded: a hook that exists in one worktree
+    only, trusted there by hand, then removed by the sandbox. The tree is
+    back to what the main tree's reference holds and takes its trust
+    again, with one line and no question ("removed …" before). Rewritten
+    instead of removed, it is refused."""
+    gg.git("config", "core.hooksPath", ".githooks", cwd=repo)
+    write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
+    gg.trust(repo)
+    wt = tmp_path / "wt"
+    assert gg.run("git", "worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    write_exec(wt / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
+    write_exec(wt / ".githooks/pre-push", "#!/bin/sh\nexit 0\n")      # the user's, in this worktree only
+    assert gg.run("git", "status", "--short", cwd=wt).blocked         # not the main tree's: no inheritance
+    gg.trust(wt)
+    mark = tmp_path / "RAN"
+    write_exec(wt / ".githooks/pre-push", f"#!/bin/sh\ntouch '{mark}'\n")
+    _changed(gg, wt)
+    (wt / ".githooks/pre-push").unlink()
+    r = gg.run("git", "status", "--short", cwd=wt)
+    assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+
+
+# ------------------------- [167] what the refusal of a tree says about its holder
+def test_refusal_names_the_holder_that_is_not_in_its_trusted_state(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """The superproject moved (here: a config of the submodule rewritten;
+    for a user, the `submodule update --init` just typed): the submodule
+    said "never trusted … gitguard trust", sending the user to bless
+    blind a tree whose question waits in the superproject."""
+    sub = _sub(gg, repo, tmp_path)
+    gg.git("config", "core.pager", "cat", cwd=sub)
+    r = gg.run("git", "status", "--short", cwd=sub)
+    assert r.blocked and "never trusted" in r.err and f"inside {repo}" in r.err, r.text
+    assert "has changed since its last trust" in r.err and "gitguard trust" not in r.err, r.text
+    assert gg.run("forget", str(repo)).rc == 0
+    r = gg.run("git", "status", "--short", cwd=sub)
+    assert r.blocked and f"inside {repo}" in r.err and "never trusted either" in r.err, r.text
+    assert not gg.key_for(sub).is_file()
+
+
+def test_refusal_stays_plain_for_a_tree_its_trusted_holder_does_not_cover(gg: GG, repo: Path,
+                                                                        tmp_path: Path) -> None:
+    """A copy of the submodule's gitfile planted elsewhere: the
+    superproject is in its trusted state and there is nothing to settle
+    there — the message does not say otherwise."""
+    sub = _sub(gg, repo, tmp_path)
+    (repo / "src").mkdir()
+    (repo / "src/.git").write_text(f"gitdir: {repo}/.git/modules/{sub.name}\n")
+    r = gg.run("git", "status", "--short", cwd=repo / "src")
+    assert r.blocked and "never trusted" in r.err and "gitguard trust" in r.err, r.text
+    assert "is inside" not in r.err, r.text
+
+
+# ---------------------------- [168] what is shown of a config under a nested root
+def test_the_diff_of_a_submodule_config_is_shown_in_the_superproject(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """The superproject's question on a submodule's config was one line,
+    `modified modules/sub/config`: the same line for the user's branch and
+    for a filter the sandbox added. The check, `gitguard diff` and the
+    review of `gitguard trust` show the lines."""
+    sub = _sub(gg, repo, tmp_path)
+    gg.git("config", "filter.x.clean", "sh evil.sh", cwd=sub)
+    for cmd in ([], ["diff"], ["git", "status"]):
+        r = gg.run(*cmd, cwd=repo)
+        assert "modules/sub/config" in r.text and "clean = sh evil.sh" in r.text, r.text
+    r = gg.run("trust", cwd=repo)
+    assert "clean = sh evil.sh" in r.text, r.text
+
+
+def test_the_diff_of_a_worktree_config_is_shown(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """`config.worktree`: the main tree's, a linked worktree's, seen from
+    the main tree and from the worktree."""
+    gg.git("config", "extensions.worktreeConfig", "true", cwd=repo)
+    wt = tmp_path / "wt"
+    assert gg.git("worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    gg.trust(repo)
+    assert gg.run("git", "status", "--short", cwd=wt).rc == 0
+    (repo / ".git/config.worktree").write_text("[core]\n\tpager = sh main.sh\n")
+    (repo / ".git/worktrees/wt/config.worktree").write_text("[core]\n\tpager = sh linked.sh\n")
+    for tree in (repo, wt):
+        r = gg.check(tree)
+        assert r.blocked and "pager = sh main.sh" in r.err and "pager = sh linked.sh" in r.err, r.text
+
+
+def test_a_config_added_under_a_nested_root_is_shown_whole(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """A submodule added since the trust: its config is new, and is what
+    git will read there."""
+    from tests.attacks._helpers import add_submodule
+    add_submodule(gg, repo, tmp_path)
+    gg.git("config", "-f", str(repo / ".git/modules/sub/config"), "core.pager", "sh evil.sh")
+    r = gg.check(repo)
+    assert r.blocked and "modules/sub/config" in r.err and "pager = sh evil.sh" in r.err, r.text

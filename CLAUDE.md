@@ -21,7 +21,9 @@ paid for by a bypass.
   never add a "known dangerous keys" list. The closed lists, each entry
   with its proof held to git in `tests/test_claims.py`: the auto-accept
   list in `branch_tracking_only` (branch tracking, VS Code's merge base,
-  a remote with a network URL [145]: keys git cannot execute),
+  a remote with a network URL [145]: keys git cannot execute; read in the
+  `config` of a nested gitdir root too [166], applied by a child git too
+  [164]),
   `PINNED_CONFIG` (`core.fsmonitor=false`, the one key an in-process
   reader executes from a repository nobody judged, [126]; the proof is the
   in-process table), `NEVER_RESUMES`/`SEQUENCE_ENDS` (commands that never
@@ -51,6 +53,8 @@ paid for by a bypass.
   option, internal error: refuse, git does not run.
 - **The state blessed is the state shown.** `save_trust` receives the
   manifest already computed and displayed; never recompute at the `y`.
+  Shown means readable: the diff of every config git reads under a gitdir
+  root, a nested one included, not its name alone (`show_changes`, [168]).
 - **Everything displayed goes through `san()`**; no raw mode, no flag the
   caller must remember.
 - **No walk of the work tree**; the index gitlink is the barrier, and a
@@ -73,10 +77,11 @@ paid for by a bypass.
   lives as long as the process that set it, pid and start time
   (`_ancestors`), never a clock ([104] [114]); a child git does not
   detach (`keep_attached`, [117]). A tree never trusted (a submodule, a
-  linked worktree) takes the trust of the repository holding its gitdir
-  on the same terms, held to that repository's reference: in its trusted
-  state, the gitdir naming the tree back, every watched file in the
-  reference (`trust_holder`, [154]).
+  linked worktree), or whose own reference no longer matches ([165]),
+  takes the trust of the repository holding its gitdir on the same terms,
+  held to that repository's reference: in its trusted state, the gitdir
+  naming the tree back, every watched file in the reference
+  (`trust_holder`, [154]); its own reference is the cache of that answer.
 - **A child never refuses what its own command just wrote**: those
   writes are judged at the next command ([124]: a re-check lost
   autostashed work).
@@ -129,7 +134,7 @@ are honoured as git honours them.
 | config parser | `_Src`, `_parse_value`, `parse_git_config` | same, "Config files parsed" |
 | output, colours, `san` | `san`, `Style`, `set_output` | Display and sanitization |
 | state files, keys, locking; a gitdir named apart from its tree (GIT_DIR: vcsh, dotfiles) is half of the key and of the records ([157]) | `save_trust`, `load_manifest`, `update_pending`, `state_key`, `gitdir_apart`, `Repo.key`/`title`/`dotgit`, `open_record`, `records_at` | Storage; What the script checks, 1 |
-| a submodule, a linked worktree trusted with the repository holding its gitdir | `trust_holder`, `REPO_ENV` | Trusted with the repository that holds the gitdir |
+| a submodule, a linked worktree trusted with the repository holding its gitdir, again when its reference no longer matches; what its refusal says of that repository | `trust_holder`, `_holder`, `holder_unsettled`, `REPO_ENV` | Trusted with the repository that holds the gitdir |
 | the pointers of a `git worktree` command gitguard ran | `WORKTREE_WRITES`, `worktree_pointers`, `accept_worktree_pointers`, `run_git` | Exec-mode shortcuts |
 | exec mode: options, clone/init, prompt, pending | `split_global_options`, `parse_new_repo`, `check_or_die`, `ask_on_tty`, `wait_for_decision` | Auto-trust; Exec-mode shortcuts |
 | passthroughs that read no repository | `TRANSPORT`, `main` | Which git runs |
@@ -140,7 +145,7 @@ are honoured as git honours them.
 
 ## Tests
 
-`python3 -m pytest` (~1780 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], the accepted limitations; ~410 s), before
+`python3 -m pytest` (~1810 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], the accepted limitations; ~410 s), before
 any change. pytest is not on the system python: `python3 -m venv <scratch>/venv
 && venv/bin/pip install pytest`.
 

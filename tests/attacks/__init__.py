@@ -1318,6 +1318,85 @@ gitguard.py refer to this list (how the project reviews itself: DESIGN.md,
      in-process, no child sees (DESIGN.md, Known limitations). Tests:
      tests/test_nested.py (the clone, and that git alone as the
      control), tests/test_legit.py, tests/test_unit.py.
+[164] False positive, blocking: a child git applied none of the accepted
+     changes. pre-commit builds the cache of a hook repository inside the
+     first `git commit` — `init --template=`, `remote add origin
+     <network url>`, `fetch`, three gits run by the commit's hook — and
+     the fetch, a child, was refused on the remote its sibling had added
+     one line above; the hook failed, pre-commit deleted the cache, and
+     every later commit failed the same way, until a `pre-commit
+     install-hooks` typed in a shell. [145] had fixed that sequence for
+     three sibling gits with no marker, which is not how it runs; replayed
+     with pre-commit 4.7.0. Found by the fifth agentic audit, 2026-11-23.
+     Fix: the closed list (branch tracking, a remote with a network URL)
+     is applied by a child too, in a repository its marker does not
+     cover: it asks nobody and touches no terminal, the reasons a child
+     neither asks nor waits. What a child does not take, in
+     tests/test_nested.py.
+[165] False positive, recurring: one change, several references. Since
+     [154] a submodule and a linked worktree have a reference of their
+     own, a copy of files the reference of the repository holding their
+     gitdir holds too — for a worktree the whole common dir, its
+     siblings' pointers included. Whatever the holder's reference took
+     afterwards was a change in each of them: `git worktree add`, `move`
+     or `remove`, accepted in the main tree ([155]), then refused in
+     every other worktree in use — a wait and a refusal for an agent
+     with no terminal, the setting [155] was written for — where the
+     `gitguard restore` the refusal names deleted the pointers of the
+     worktree just created; hooks husky generates in a worktree after
+     its first git command, the bytes trusted at the same place in the
+     main tree; a change of a submodule the user had answered in the
+     superproject, asked again by the submodule. Found by the fifth
+     agentic audit, 2026-11-23 (two reviewers). Fix: the rule of the
+     first use is asked again when a tree's reference no longer matches
+     (trust_holder: the holder in its trusted state, the gitdir naming
+     the tree back, every watched file in the holder's reference); the
+     tree's own reference is a cache of that answer. Given up, recorded
+     in tests/test_nested.py: an entry only the tree's reference held (a
+     hook of one worktree, trusted there by hand) that goes missing is
+     no longer shown as removed — the tree is one the holder covers;
+     rewritten, it is refused.
+[166] False positive, recurring: `checkout -b feat origin/main` typed in
+     a submodule writes the branch's tracking in `modules/<x>/config`.
+     Accepted from the submodule, where that file is `config`, it was
+     asked from the superproject at its next command — a refusal with no
+     terminal, at every branch created in a submodule, and the routine
+     question [168] hid behind. Found by the fifth agentic audit,
+     2026-11-23. Fix: auto_accept reads the `config` of a gitdir root
+     nested in the judged gitdir with the same closed list, and several
+     configs at once, each moved by that list alone; the line printed
+     names the root. What is not accepted — a filter beside the
+     tracking, a remote to a path or through a helper, an alias in one
+     config while the other is harmless — is in the corpus
+     (tests/attacks/nested.py).
+[167] Wrong message: a submodule or a worktree nobody trusted, whose
+     holder is not in its trusted state — the `git submodule update
+     --init` the user just typed moved it — was refused "never trusted …
+     Inspect .git/config and .git/hooks, then: gitguard trust": an
+     invitation to bless the tree blind, while one command in the
+     superproject asks the question and the tree then takes its trust.
+     Found by the fifth agentic audit, 2026-11-23. Fix: the refusal names
+     the holder and says which of the two it is, changed or never
+     trusted (holder_unsettled). Only then: a tree a trusted holder does
+     not cover, a gitfile planted elsewhere, keeps the plain message — a
+     first version said "settle the holder first" there too, to someone
+     with nothing to settle.
+[168] A question that hides what it blesses: seen from the superproject,
+     a change of a submodule's config was one line, `modified
+     modules/sub/config`, with no diff — the readable diff was printed
+     for the judged gitdir's own `config` only. The same line for the
+     branch the user created in the submodule ([166]) and for a
+     `filter.x.clean` the sandbox added there, which the `y` given out of
+     habit blessed and every later `git status` of the superproject ran
+     (the child entering the submodule is covered). `gitguard diff`,
+     `gitguard pending` and the review of `gitguard trust` showed no
+     more. Found by the fifth agentic audit, 2026-11-23. Fix:
+     show_changes prints the diff of every `config` and `config.worktree`
+     under a gitdir root that changed — the gitdir's, the common one, a
+     submodule's, a linked worktree's — and a config that was not there,
+     whole. Not yet shown: the one line of a worktree pointer, the config
+     of a repository outside the gitdir (a local remote, a borrowed
+     repository: hashed, never copied).
 """
 from __future__ import annotations
 

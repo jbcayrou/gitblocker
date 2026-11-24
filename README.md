@@ -264,11 +264,16 @@ or the target already held a gitdir, in which case it says so).
 
 Commit, checkout, merge, rebase, stash, bisect and gc touch only volatile
 files: nothing to do. `submodule add` and `submodule update --init` write
-to the gitdir: the next command asks once. `git worktree add`, `move`,
-`remove` and `prune` run through gitguard ask nothing (a worktree created
-by another git, an IDE's bundled one, is asked about once). A submodule or
-a linked worktree needs no trust of its own: the first git run there takes
-the trust of the repository that holds it, and says so (`trusted with …`).
+to the gitdir: the next command in the superproject asks once (typed in
+the new submodule first, it is refused and names the superproject). `git
+worktree add`, `move`, `remove` and `prune` run through gitguard ask
+nothing, in the main tree or in the other worktrees (a worktree created by
+another git, an IDE's bundled one, is asked about once). A submodule or a
+linked worktree needs no trust of its own: the first git run there takes
+the trust of the repository that holds it, and says so (`trusted with …`),
+and again whenever that repository's reference has moved. A branch created
+in a submodule (`checkout -b`, `push -u`) asks nothing, there or in the
+superproject.
 When a command finds the repository changed, one of three things happens.
 
 `git --version` is never checked: it reads no repository, and the tools
@@ -332,13 +337,15 @@ a repository already trusted that now differs from its reference, and
 accepts the difference without asking when it is one of the few things git
 and your editor write into `.git/config` by themselves in the course of a
 normal day. The point is to keep the `[y/N]` question for the rare changes
-you will actually read (`remote add`, a hook, an `include.path`), instead
-of training a reflex `y`.
+you will actually read (a hook, an `include.path`, a remote to a local
+path), instead of training a reflex `y`.
 
-The rule: the only file that changed is `.git/config` (or the main
-repository's config, when working from a linked worktree), and the
-**semantic** difference between the trusted config and the new one is
-limited to added or removed lines of these keys (a config that only differs
+The rule: every file that changed is a `config` — the repository's, the
+main repository's when working from a linked worktree, a submodule's
+(`.git/modules/<x>/config`: a branch created in a submodule is accepted
+from the submodule and from the superproject alike) — and the **semantic**
+difference between the trusted config and the new one is limited, for
+each, to added or removed lines of these keys (a config that only differs
 by a comment has no semantic difference, and is not accepted either):
 
 | Key | Written by | Accepted value | Why it cannot run anything |
@@ -346,13 +353,21 @@ by a comment has no semantic difference, and is not accepted either):
 | `branch.<x>.remote` | `push -u`, `branch -u`, `checkout -b` with `autoSetupMerge` | a remote already present in the trusted config, or `.` | names an existing `[remote]` section; a new remote is not accepted this way |
 | `branch.<x>.merge` | same | `refs/heads/…` | a ref name git resolves, never executes |
 | `branch.<x>.vscode-merge-base` | VS Code's git extension, when it opens a repository | a ref name: no leading `-`, no blank, no control character | git ignores the key; VS Code passes the value to `git merge-base` |
+| `remote.<n>.url` | `remote add` | a URL git reaches over the network by itself: `http(s)://`, `ftp(s)://`, `git://`, `ssh://`, `user@host:path` | no path of the machine and no program is named; a local path or `file://` (git runs that repository's hooks) and `<helper>::…` (git runs the helper) are asked |
+| `remote.<n>.fetch` | same | a refspec | names refs |
 
-Anything outside this, a `branch.<x>.rebase` or a new `[remote]` section
-for instance, goes through the question. It is a closed allowlist of three harmless keys, not
-a blocklist of dangerous ones: nothing enters it without a demonstration
-that the key cannot make git execute anything. Since git writes these
-lines *after* the check (`push -u` runs, then records the tracking), it is
-the next command that accepts them.
+Anything outside this, a `branch.<x>.rebase` or a remote to a local path
+for instance, goes through the question. It is a closed allowlist of
+harmless keys, not a blocklist of dangerous ones: nothing enters it
+without a demonstration that the key cannot make git execute anything.
+Since git writes these lines *after* the check (`push -u` runs, then
+records the tracking), it is the next command that accepts them.
+
+A git run by another git — a hook, a tool a hook starts — is never asked a
+question: it shares the terminal of the git that runs it. It applies this
+list all the same. pre-commit fetches a hook repository into its cache
+inside your first `git commit` (`init`, `remote add`, `fetch`): that
+passes; anything else found changed there is refused at once.
 
 One more thing is accepted without a question, on other grounds: the two
 pointers `git worktree add`, `move`, `remove` and `prune` write under

@@ -1599,6 +1599,132 @@ def test_worktree_add_with_a_tracking_branch_asks_nothing(gg: GG, repo: Path, tm
     assert "feat" in gg.git("config", "--get-regexp", r"^branch\.", cwd=repo).out
 
 
+# ----------------- [164] a child git takes what the closed list takes (2026-11-24)
+def test_hook_child_accepts_the_network_remote_its_sibling_added(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[164] pre-commit's first use of a hook repository happens inside the
+    first `git commit`: `init --template=`, `remote add origin https://…`,
+    `fetch`, three gits run by the commit's hook. Children of a judged git,
+    they took none of the accepted changes ([145] was reached from a shell
+    only): the fetch was refused on the remote its sibling had just added,
+    the hook failed, pre-commit deleted its cache and the next commit
+    failed the same way. The closed list holds for a child too."""
+    cache, log = tmp_path / "cache/repoA", tmp_path / "fetch.err"
+    write_exec(repo / ".git/hooks/pre-commit", f"""#!/bin/sh
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX
+git init -q --template= '{cache}' || exit 11
+cd '{cache}' || exit 12
+git remote add origin https://example.invalid/hooks.git || exit 13
+git fetch -q origin --depth=1 v1 2>'{log}'
+exit 0
+""")
+    gg.trust(repo)
+    (repo / "f").write_text("b\n")
+    r = gg.run("git", "commit", "-qam", "second", cwd=repo)
+    assert r.rc == 0, r.text
+    err = log.read_text()
+    assert "has changed" not in err and "remote origin" in err, err     # git fails on the network only
+    assert not gg.check(cache).blocked
+    assert gg.git("rev-list", "--count", "HEAD", cwd=repo).out.strip() == "2"
+
+
+# ------------- [165] a tree follows what its holder's reference took (2026-11-24)
+def test_a_worktree_follows_the_worktree_commands_of_the_main_tree(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[165] a linked worktree that took the main tree's trust ([154]) has
+    a reference of its own, which holds the whole common dir — the other
+    worktrees' pointers too. `worktree add`, `move`, `remove` asked nothing
+    in the main tree ([155]) and were a "has changed" in every other
+    worktree in use: a refusal for the agent that works there with no
+    terminal, and a `gitguard restore` typed there deleted the pointers of
+    the worktree just created. The rule of the first use holds at every
+    use: the main tree in its trusted state holds every file the worktree
+    watches."""
+    a, b, c = (tmp_path / n for n in "abc")
+    _silent(gg, repo, "worktree", "add", "-q", str(a))
+    _inherits(gg, a, repo)
+    for cmd in (["add", "-q", str(b)], ["move", str(b), str(c)], ["remove", str(c)]):
+        _silent(gg, repo, "worktree", *cmd)
+        _inherits(gg, a, repo)
+        r = gg.run("restore", "-y", cwd=a)
+        assert r.rc == 0 and "nothing to restore" in r.text, r.text
+        assert not gg.check(repo).blocked
+
+
+def test_hooks_generated_in_a_worktree_after_its_first_command(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[165] husky: `npm install` in a fresh worktree runs `git config
+    core.hooksPath .husky/_` first — the worktree's first use, it takes
+    the main tree's trust with an empty hooks directory — then writes the
+    hooks there, the bytes and modes trusted at the same place in the
+    main tree. They were refused as added files."""
+    def husky(tree: Path) -> None:
+        assert gg.run("git", "config", "core.hooksPath", ".husky/_", cwd=tree).rc == 0
+        for name in ("pre-commit", "h"):
+            write_exec(tree / ".husky/_" / name, "#!/bin/sh\nexit 0\n")
+    husky(repo)
+    gg.trust(repo)
+    wt = tmp_path / "wt"
+    _silent(gg, repo, "worktree", "add", "-q", str(wt))
+    husky(wt)
+    r = gg.run("git", "commit", "-q", "--allow-empty", "-m", "in wt", cwd=wt)
+    assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+    r = gg.run("git", "status", "--short", cwd=wt)
+    assert r.rc == 0 and "gitguard:" not in r.err, r.text
+
+
+def test_a_submodule_follows_what_the_superproject_was_trusted_with(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[165] a change of the submodule's config the user reviewed in the
+    superproject (its diff is shown there, [168]) was asked a second time
+    by the submodule's own reference."""
+    sub = add_submodule(gg, repo, tmp_path)
+    gg.trust(repo)
+    _inherits(gg, sub, repo)
+    gg.git("config", "core.pager", "cat", cwd=sub)
+    assert gg.check(sub).blocked and gg.check(repo).blocked
+    gg.trust(repo)
+    _inherits(gg, sub, repo)
+
+
+# -------- [166] branch tracking written in a submodule, seen from the superproject (2026-11-24)
+@pytest.mark.parametrize("first", ["submodule", "superproject"])
+def test_branch_tracking_in_a_submodule_asks_nothing_in_the_superproject(gg: GG, repo: Path, tmp_path: Path,
+                                                                         first: str) -> None:
+    """[166] `checkout -b feat origin/main` in a submodule writes the
+    branch's tracking in `modules/<x>/config`: accepted from the submodule
+    (its `config`), asked from the superproject, where the same bytes are
+    a nested file — a refusal with no terminal, for every branch created
+    in a submodule. The closed list is the same list whichever of the two
+    reads the file first."""
+    sub = add_submodule(gg, repo, tmp_path)
+    gg.trust(repo)
+    _inherits(gg, sub, repo)
+    assert gg.run("git", "checkout", "-q", "-b", "feat", "origin/main", cwd=sub).rc == 0
+    assert "feat" in gg.git("config", "--get-regexp", r"^branch\.", cwd=sub).out
+    order = [sub, repo] if first == "submodule" else [repo, sub]
+    r = gg.run("git", "status", "--short", cwd=order[0])
+    assert r.rc == 0 and "branch tracking for feat" in r.err and "has changed" not in r.err, r.text
+    if first == "superproject":
+        assert "modules/sub" in r.err, r.text                # which config it was
+    r = gg.run("git", "status", "--short", cwd=order[1])
+    assert r.rc == 0 and "has changed" not in r.err and "✗" not in r.err, r.text
+    assert not gg.check(repo).blocked and not gg.check(sub).blocked
+
+
+def test_branch_tracking_in_both_configs_is_one_acceptance(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[166] a branch created in the superproject and one in the submodule
+    before the next command of the superproject: two configs, each moved
+    by tracking alone."""
+    sub = add_submodule(gg, repo, tmp_path)
+    hub = tmp_path / "hub.git"
+    gg.git("init", "-q", "--bare", str(hub))
+    gg.git("remote", "add", "origin", str(hub), cwd=repo)
+    gg.git("push", "-q", "origin", "main", cwd=repo)
+    gg.trust(repo)
+    assert gg.git("checkout", "-q", "-b", "one", "origin/main", cwd=repo).rc == 0
+    assert gg.git("checkout", "-q", "-b", "two", "origin/main", cwd=sub).rc == 0
+    r = gg.run("git", "status", "--short", cwd=repo)
+    assert r.rc == 0 and "one" in r.err and "two" in r.err and "has changed" not in r.err, r.text
+    assert not gg.check(repo).blocked
+
+
 # ------------------- a repository git borrows objects from ([156], 2026-11-13)
 def _objects(repo: Path) -> int:
     """Object files the repository holds itself: loose objects and packs."""

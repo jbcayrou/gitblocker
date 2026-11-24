@@ -304,3 +304,51 @@ def attack_worktree_gitdir_planted_in_a_volatile_zone(gg: GG, repo: Path, tmp_pa
     (adm / "gitdir").write_text(f"{repo}/src/.git\n")
     (repo / "src").mkdir()
     (repo / "src/.git").write_text(f"gitdir: {adm}\n")
+
+
+def _submodule_config(gg: GG, repo: Path, tmp_path: Path, lines: str) -> None:
+    """A trusted superproject whose submodule is in use; `lines` appended
+    to the submodule's config, `modules/sub/config`."""
+    sub = add_submodule(gg, repo, tmp_path)
+    gg.trust(repo)
+    assert gg.run("git", "status", "--short", cwd=sub).rc == 0     # the submodule took the trust
+    with open(repo / ".git/modules/sub/config", "a") as f:
+        f.write(lines)
+
+
+def attack_submodule_config_filter_behind_branch_tracking(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[166] [168] a filter added to a submodule's config beside the
+    tracking of a branch the user created there: not tracking alone, and
+    not one line `modified modules/sub/config` either"""
+    _submodule_config(gg, repo, tmp_path, '[branch "feat"]\n\tremote = origin\n\tmerge = refs/heads/main\n'
+                                          '[filter "x"]\n\tclean = sh evil.sh\n')
+
+
+def attack_submodule_config_remote_to_a_path_of_the_volume(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[166] a remote added to a submodule's config with a path of the
+    volume as its URL: git runs that repository's hooks and config ([45]
+    [61]), the list takes a network URL only"""
+    _submodule_config(gg, repo, tmp_path, f'[remote "up"]\n\turl = {tmp_path}/evil\n'
+                                          '\tfetch = +refs/heads/*:refs/remotes/up/*\n')
+
+
+def attack_submodule_config_remote_through_a_helper(gg: GG, repo: Path, tmp_path: Path) -> None:
+    """[166] a remote added to a submodule's config whose URL names a
+    remote helper (`ext::` runs a command)"""
+    _submodule_config(gg, repo, tmp_path, '[remote "up"]\n\turl = ext::sh -c evil.sh\n')
+
+
+def attack_alias_in_a_submodule_config_beside_tracking_in_the_superproject(gg: GG, repo: Path,
+                                                                         tmp_path: Path) -> None:
+    """[166] two configs moved at once, the superproject's by branch
+    tracking, the submodule's by an alias: accepted together or not at all"""
+    sub = add_submodule(gg, repo, tmp_path)
+    hub = tmp_path / "hub.git"
+    gg.git("init", "-q", "--bare", str(hub))
+    gg.git("remote", "add", "origin", str(hub), cwd=repo)
+    gg.git("push", "-q", "origin", "main", cwd=repo)
+    gg.trust(repo)
+    assert gg.run("git", "status", "--short", cwd=sub).rc == 0     # the submodule took the trust
+    with open(repo / ".git/modules/sub/config", "a") as f:
+        f.write("[alias]\n\tst = !sh evil.sh\n")
+    assert gg.git("checkout", "-q", "-b", "one", "origin/main", cwd=repo).rc == 0
