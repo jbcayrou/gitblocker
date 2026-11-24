@@ -10,6 +10,10 @@
 #
 #   docker run --rm -v "$PWD":/src:ro debian:13 sh -c \
 #       'cp -r /src /w && cd /w && GITBLOCKER_DEB_TEST=throwaway ci/test-deb.sh'
+#
+# GITBLOCKER_DEB=<file> replays the life of that package instead of one
+# built here: the workflow builds the .deb once and hands the same file to
+# every distribution, then to the release.
 set -eu
 if [ "${GITBLOCKER_DEB_TEST:-}" != throwaway ] || [ "$(id -u)" != 0 ]; then
     echo "ci/test-deb.sh installs and removes git: run it as root in a throwaway" >&2
@@ -68,7 +72,16 @@ id user >/dev/null 2>&1 || useradd -m user
 [ -f $BIN ] && [ ! -L $BIN ] && [ -f $CORE ] && [ ! -L $CORE ] || fail "expected two regular files: $BIN, $CORE"
 real_bin=$(sum $BIN) real_core=$(sum $CORE)
 git --version
-deb=$("$here/ci/build-deb.sh" /tmp/deb)
+if [ -n "${GITBLOCKER_DEB:-}" ]; then
+    [ -f "$GITBLOCKER_DEB" ] || fail "GITBLOCKER_DEB: no such file: $GITBLOCKER_DEB"
+    # A copy apt can read as its unprivileged user, under a name of the
+    # form apt takes for a file (a `/` in it).
+    mkdir -p /tmp/deb
+    cp "$GITBLOCKER_DEB" /tmp/deb/
+    deb=/tmp/deb/$(basename "$GITBLOCKER_DEB")
+else
+    deb=$("$here/ci/build-deb.sh" /tmp/deb)
+fi
 [ "$(python3 "$here/gitblocker.py" version)" = "gitblocker $(dpkg-deb -f "$deb" Version)" ] || fail "the package's version is not gitblocker's"
 next=$(DEB_VERSION=99.0.0 "$here/ci/build-deb.sh" /tmp/deb)
 dpkg-deb --info "$deb" | sed -n 's/^ \(Package\|Version\|Depends\|Maintainer\)/\1/p'

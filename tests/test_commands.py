@@ -659,12 +659,14 @@ def test_help(gb: GB) -> None:
 @pytest.mark.parametrize("arg", ["version", "--version"])
 def test_version(gb: GB, tmp_path: Path, arg: str) -> None:
     """The version a package is built from (ci/build-deb.sh reads the same
-    constant): one line on stdout, from any directory, no repository read."""
+    constant, and a release is the tag `v<VERSION>`): one line on stdout,
+    from any directory, no repository read. Two or three numbers: 0.1, then
+    0.1.1 or 0.2."""
     import re
     import gitblocker as gb_mod
     r = gb.run(arg, cwd=tmp_path)
     assert r.rc == 0 and r.out == f"gitblocker {gb_mod.VERSION}\n" and r.err == "", r.text
-    assert re.fullmatch(r"\d+\.\d+\.\d+", gb_mod.VERSION)
+    assert re.fullmatch(r"\d+\.\d+(\.\d+)?", gb_mod.VERSION)
 
 
 def test_untrusted_message_colors_on_tty(gb: GB, tmp_path: Path) -> None:

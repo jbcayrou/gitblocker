@@ -351,7 +351,7 @@ independent. The non-git programs of the directory (`git-remote-https`,
 `git-http-backend`, `git-daemon`, the shell and perl scripts) are untouched
 and keep working: they call `git`, which is gitblocker.
 
-The proper form is a `gitblocker` package: `Depends: git, python3`; `preinst`
+The proper form is a `gitblocker` package: `Depends: git (>= 1:2.39), python3 (>= 3.9)`; `preinst`
 adds the two diversions (`--package gitblocker`, so `apt upgrade git` and
 `apt remove gitblocker` never fight), the package ships `/usr/bin/gitblocker`
 and the two symlinks as its own files, `postrm remove` removes the

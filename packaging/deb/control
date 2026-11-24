@@ -3,7 +3,7 @@ Version: @VERSION@
 Architecture: all
 Maintainer: @MAINTAINER@
 Installed-Size: @SIZE@
-Depends: git, python3 (>= 3.9)
+Depends: git (>= 1:2.39), python3 (>= 3.9)
 Section: vcs
 Priority: optional
 Homepage: https://github.com/jbcayrou/gitblocker

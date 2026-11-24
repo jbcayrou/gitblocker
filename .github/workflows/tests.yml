@@ -1,9 +1,15 @@
 # The suite takes git as its oracle: every supported git is a job, on both
 # systems. The versions are built from kernel.org (ci/build-git.sh) and
 # cached; `distro` runs a distribution's own git and python, patches
-# included, the target of the system-wide install (README); `package`
-# builds the .deb there and replays its life against that git: install,
-# upgrades, remove, purge (ci/test-deb.sh).
+# included, the target of the system-wide install (README). `deb` builds
+# the package once (ci/build-deb.sh) and keeps it as the run's artifact;
+# `package` replays the life of that very file on each distribution,
+# against its git: install, upgrades, remove, purge (ci/test-deb.sh).
+#
+# A tag `v<VERSION>` runs the same jobs and, when all of them are green,
+# `release` attaches that file to a draft release of the tag: the package
+# published is the one that was tested, and nothing is public until the
+# draft is published by hand.
 #
 # The Linux runner is named, not `ubuntu-latest`: that label moved to Ubuntu
 # 26.04 under the first run of this file, where git 2.39, 2.43 and 2.47 did
@@ -82,8 +88,41 @@ jobs:
           chown -R user .
           su user -c 'git --version && python3 -m pytest'
 
+  deb:
+    name: build the .deb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # A tag that is not the version of the script would publish a package
+      # under another number than its own: refused before anything is built.
+      - name: The tag is the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(python3 gitblocker.py version | cut -d' ' -f2)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but gitblocker.py is version $version: the tag must be v$version"
+            exit 1
+          fi
+      - name: Build
+        env:
+          # The Maintainer field, when the repository sets one (Settings →
+          # Variables); else the default of ci/build-deb.sh.
+          DEB_MAINTAINER: ${{ vars.DEB_MAINTAINER }}
+        run: |
+          deb=$(ci/build-deb.sh dist)
+          (cd dist && sha256sum "$(basename "$deb")" > SHA256SUMS && cat SHA256SUMS)
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gitblocker-deb
+          path: dist/
+          if-no-files-found: error
+
   package:
     name: package on ${{ matrix.image }}
+    needs: deb
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -93,7 +132,36 @@ jobs:
     container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: gitblocker-deb
+          path: dist
       # As root, in the job's own container: the script installs and
       # removes git, and says so before doing anything elsewhere.
-      - name: Build, install, upgrade, remove, purge
-        run: GITBLOCKER_DEB_TEST=throwaway ci/test-deb.sh
+      - name: Install, upgrade, remove, purge
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          GITBLOCKER_DEB_TEST=throwaway GITBLOCKER_DEB=$(ls "$PWD"/dist/gitblocker_*_all.deb) ci/test-deb.sh
+
+  release:
+    name: draft the release of ${{ github.ref_name }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [matrix, distro, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: gitblocker-deb
+          path: dist
+      - name: Draft release with the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
+              --title "gitblocker ${GITHUB_REF_NAME#v}" --generate-notes \
+              dist/gitblocker_*_all.deb dist/SHA256SUMS

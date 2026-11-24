@@ -117,7 +117,18 @@ install, `apt install --reinstall git`, an upgrade of gitblocker, remove,
 purge, the take-over of a hand-made install, the removal of git — and
 after each step holds one of two states: wrapped at both names with the
 distribution's bytes at `git.real`, or as if the package had never been
-there. macOS keeps the PATH symlink
+there. The workflow builds the package once (job `deb`, kept as the run's
+artifact with its `SHA256SUMS`), hands that file to each distribution
+(`package`: `GITBLOCKER_DEB`), and on a tag `v<VERSION>`, when every job
+of the run is green, attaches it to a **draft** release (`release`): the
+package published is the one that was tested, and nothing is public
+before a hand publishes the draft. A tag that is not the script's
+`VERSION` fails before anything is built. Two choices in the package
+itself: `Depends: git (>= 1:2.39)`, so that apt refuses to wrap a git the
+suite does not hold gitblocker to; and xz named to `dpkg-deb`, since
+Ubuntu's builds with zstd by default, which an older dpkg cannot unpack —
+the file is the same whatever distribution builds it. macOS keeps the
+PATH symlink
 (`/usr/bin/git` is under SIP, renaming Homebrew's git is undone by `brew
 upgrade`) plus VS Code's `git.path`, and a `GIT_EXEC_PATH` directory for
 the children; `trust` warns when the exec path is not wrapped.

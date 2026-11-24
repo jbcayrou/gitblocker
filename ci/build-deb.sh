@@ -41,5 +41,8 @@ sed -e "s|@VERSION@|$version|" -e "s|@MAINTAINER@|$maintainer|" -e "s|@SIZE@|$si
 install -m 755 "$here/packaging/deb/preinst" "$here/packaging/deb/postrm" "$stage/DEBIAN/"
 
 mkdir -p "$out"
-dpkg-deb --root-owner-group --build "$stage" "$out/gitblocker_${version}_all.deb" >/dev/null
+# xz, named: Ubuntu's dpkg-deb compresses with zstd by default, which a dpkg
+# older than 1.21.18 cannot unpack. The package is the same file whatever
+# distribution builds it.
+dpkg-deb -Zxz --root-owner-group --build "$stage" "$out/gitblocker_${version}_all.deb" >/dev/null
 echo "$out/gitblocker_${version}_all.deb"

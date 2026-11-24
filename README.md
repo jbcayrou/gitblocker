@@ -170,12 +170,23 @@ alias git='gitblocker git'
 To wrap every git on the machine, cron and GUIs included, gitblocker is
 installed *as* `/usr/bin/git` and at the exec path, `/usr/lib/git-core/git`,
 and the real binaries are diverted to `git.real` beside them. The package
-does it:
+does it. Each [release](https://github.com/jbcayrou/gitblocker/releases)
+carries it, `gitblocker_<version>_all.deb`, with its `SHA256SUMS`:
+
+```sh
+sha256sum -c SHA256SUMS
+sudo apt install ./gitblocker_*_all.deb
+```
+
+or build it from a checkout:
 
 ```sh
 ci/build-deb.sh                              # needs dpkg-deb; writes dist/gitblocker_<version>_all.deb
 sudo apt install ./dist/gitblocker_*_all.deb
 ```
+
+It depends on git ≥ 2.39 and Python ≥ 3.9: apt refuses it on an older
+distribution rather than wrap a git gitblocker is not tested against.
 
 `apt upgrade git` then installs every new git at the diverted names, never
 over gitblocker, and `sudo apt remove gitblocker` puts the real git back, byte
@@ -602,8 +613,10 @@ against it. Every push runs it (`.github/workflows/tests.yml`) on Linux
 and macOS against git 2.39, 2.43, 2.47, 2.50 and 2.56, built from
 kernel.org by `ci/build-git.sh`; on Debian 12, Debian 13, Ubuntu 24.04
 and Ubuntu 26.04 with the distribution's own git and python; and once on
-Python 3.9. On the same four distributions it builds the package and
-replays its life against the distribution's git (`ci/test-deb.sh`).
+Python 3.9. It builds the package once and replays the life of that file
+on the same four distributions, against the distribution's git
+(`ci/test-deb.sh`). A tag `v<version>` goes through the same jobs, and the
+package they tested is the one attached to the release.
 
 gitblocker never asks git its version. Where two supported gits read one
 file two ways — a tab between two words of a config value is a space

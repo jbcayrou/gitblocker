@@ -65,7 +65,7 @@ from collections.abc import Callable, Iterable, Iterator
 from functools import cached_property
 from pathlib import Path
 
-VERSION = "0.1.0"    # `gitblocker version`; the package's (ci/build-deb.sh reads this line)
+VERSION = "0.1"      # `gitblocker version`; the package's (ci/build-deb.sh reads this line)
 FORMAT_VERSION = 5   # 4: symlink hashes include the target's content
                      # 5: what the system and global config name is no longer an entry ([179])
 

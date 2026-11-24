@@ -139,7 +139,10 @@ gitblocker version             VERSION, read by ci/build-deb.sh
 The Debian/Ubuntu package (`packaging/deb/`: control, `preinst` adds the
 two diversions, `postrm` removes them) is built by `ci/build-deb.sh` and
 its life replayed by `ci/test-deb.sh`, as root in a throwaway container
-only: `GITBLOCKER_DEB_TEST=throwaway`, it installs and removes git.
+only: `GITBLOCKER_DEB_TEST=throwaway`, it installs and removes git. The
+workflow builds it once, replays that file on four distributions
+(`GITBLOCKER_DEB`) and, on a tag `v<VERSION>`, attaches it to a draft
+release once every job is green (`.github/workflows/tests.yml`).
 
 Environment: `GITBLOCKER_STATE`, `GITBLOCKER_REAL_GIT`,
 `GITBLOCKER_ALLOW_REBASE_EXEC`, `GITBLOCKER_NO_PROMPT`, `GITBLOCKER_WAIT`,
