@@ -1,13 +1,13 @@
-title: gitwary
+title: gitblocker
 description: A guard that refuses to run git on a repository whose trusted files changed since you last looked. One Python file, standard library only.
 url: https://jbcayrou.github.io
-baseurl: /gitwary
+baseurl: /gitblocker
 lang: en
 plugins:
   - jekyll-seo-tag
 exclude:
   - README.md
-github_url: https://github.com/jbcayrou/gitwary
+github_url: https://github.com/jbcayrou/gitblocker
 markdown: kramdown
 kramdown:
   input: GFM

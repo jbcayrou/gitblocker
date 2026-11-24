@@ -1,6 +1,6 @@
-"""gitwary's lists of claims about git, held to git itself.
+"""gitblocker's lists of claims about git, held to git itself.
 
-Each closed list in gitwary.py says "git never does X here": a global flag
+Each closed list in gitblocker.py says "git never does X here": a global flag
 that does not move the gitdir (GLOBAL_FLAGS), the options of clone and
 init (NEW_REPO_OPTIONS), the index extensions git requires
 (KNOWN_REQUIRED_EXTENSIONS), the invocations run without a check
@@ -22,9 +22,9 @@ from pathlib import Path
 
 import pytest
 
-import gitwary as gw_mod
+import gitblocker as gb_mod
 from tests.attacks._helpers import conflicting_notes, git_has
-from tests.conftest import GW, REAL_GIT
+from tests.conftest import GB, REAL_GIT
 from tests.test_commands import EDITOR, _gitlink_in_head, _gitlink_in_head_volatile_zone, _typechange_to_repo
 
 
@@ -35,32 +35,32 @@ def _help(*args: str) -> str:
 
 
 # ============================================== GLOBAL_FLAGS vs git's gitdir
-def _git_gitdir(gw: GW, args: list[str], cwd: Path) -> Path | None:
+def _git_gitdir(gb: GB, args: list[str], cwd: Path) -> Path | None:
     """The gitdir git uses for `git <args> rev-parse --absolute-git-dir`,
     None when it uses none (or prints something else and exits, as
     `--exec-path` does)."""
-    r = gw.git(*args, "rev-parse", "--absolute-git-dir", cwd=cwd)
+    r = gb.git(*args, "rev-parse", "--absolute-git-dir", cwd=cwd)
     out = r.out.strip()
-    if r.rc or not out or not gw_mod.is_bare_gitdir(Path(out)):
+    if r.rc or not out or not gb_mod.is_bare_gitdir(Path(out)):
         return None
     return Path(out).resolve()
 
 
-def _gw_gitdir(args: list[str], cwd: Path, monkeypatch) -> Path | str | None:
-    """The gitdir gitwary checks for the same command line, "refused" when
+def _gb_gitdir(args: list[str], cwd: Path, monkeypatch) -> Path | str | None:
+    """The gitdir gitblocker checks for the same command line, "refused" when
     it refuses, None when it sees no repository."""
     monkeypatch.delenv("GIT_DIR", raising=False)
     monkeypatch.delenv("GIT_WORK_TREE", raising=False)
     try:
-        o = gw_mod.split_global_options([*args, "rev-parse"], cwd)
+        o = gb_mod.split_global_options([*args, "rev-parse"], cwd)
         if o.gitdir is not None:
             monkeypatch.setenv("GIT_DIR", str(o.gitdir.resolve()))
         monkeypatch.chdir(o.cwd)
-        root = gw_mod.find_root(Path.cwd())
+        root = gb_mod.find_root(Path.cwd())
         if root is None:
             return None
-        return gw_mod.open_repo(root).gitdir.resolve()
-    except gw_mod.Refuse:
+        return gb_mod.open_repo(root).gitdir.resolve()
+    except gb_mod.Refuse:
         return "refused"
 
 
@@ -73,49 +73,49 @@ def _plant_gitdir_at_root(repo: Path) -> None:
 
 
 @pytest.mark.discovery
-@pytest.mark.parametrize("flag", sorted(gw_mod.GLOBAL_FLAGS) + ["--bare"])
-def test_global_flag_gitdir_as_git(gw: GW, repo: Path, monkeypatch, flag: str) -> None:
-    """[97] for every global flag gitwary lets through, the gitdir git
-    opens is the one gitwary checks (or gitwary refuses)."""
+@pytest.mark.parametrize("flag", sorted(gb_mod.GLOBAL_FLAGS) + ["--bare"])
+def test_global_flag_gitdir_as_git(gb: GB, repo: Path, monkeypatch, flag: str) -> None:
+    """[97] for every global flag gitblocker lets through, the gitdir git
+    opens is the one gitblocker checks (or gitblocker refuses)."""
     _plant_gitdir_at_root(repo)
-    want = _git_gitdir(gw, [flag], repo)
-    got = _gw_gitdir([flag], repo, monkeypatch)
+    want = _git_gitdir(gb, [flag], repo)
+    got = _gb_gitdir([flag], repo, monkeypatch)
     if want is not None:
         assert got in (want, "refused"), (flag, want, got)
 
 
 def test_git_usage_global_options_are_known() -> None:
-    """Every global option git's usage names is one gitwary interprets (an
+    """Every global option git's usage names is one gitblocker interprets (an
     unknown one is refused: fail closed, but a known one misread is a
     bypass, so each must be in a table the test above checks)."""
     usage = _help()
     opts = set(re.findall(r"(?<![\w-])(--?[a-zA-Z][\w-]*)", usage.split("<command>")[0]))
     opts -= {"--version", "-v", "-h", "--help"}            # GLOBAL_STOP
-    known = (gw_mod.GLOBAL_FLAGS | gw_mod.GLOBAL_WITH_ARG | gw_mod.GLOBAL_STOP | {"--bare"}
-             | {o.rstrip("=") for o in gw_mod.GLOBAL_WITH_EQ})
+    known = (gb_mod.GLOBAL_FLAGS | gb_mod.GLOBAL_WITH_ARG | gb_mod.GLOBAL_STOP | {"--bare"}
+             | {o.rstrip("=") for o in gb_mod.GLOBAL_WITH_EQ})
     assert opts and opts <= known, sorted(opts - known)
 
 
 # ====================================== passthroughs that read no repository
-@pytest.mark.parametrize("opt", [o[0] for o in gw_mod.PATH_QUERIES])
-def test_path_query_passes_through_and_matches_git(gw: GW, repo: Path, opt: str) -> None:
+@pytest.mark.parametrize("opt", [o[0] for o in gb_mod.PATH_QUERIES])
+def test_path_query_passes_through_and_matches_git(gb: GB, repo: Path, opt: str) -> None:
     """PATH_QUERIES: `git --exec-path` (and `--html-path`, `--man-path`,
     `--info-path`) print and exit in handle_options, before any setup —
     the exec path's shell scripts start with `. "$(git --exec-path)/git-sh-setup"`.
-    Through gitwary, in a never-trusted repository, the answer is git's."""
+    Through gitblocker, in a never-trusted repository, the answer is git's."""
     (repo / "x").write_text("x\n")
-    gw.git("config", "core.hooksPath", "/nowhere", cwd=repo)     # the repository is no longer trusted
-    assert gw.check(repo).blocked
-    r = gw.run("git", opt, cwd=repo)
-    want = subprocess.run(["git", opt], cwd=repo, env=gw.env, capture_output=True, text=True)
+    gb.git("config", "core.hooksPath", "/nowhere", cwd=repo)     # the repository is no longer trusted
+    assert gb.check(repo).blocked
+    r = gb.run("git", opt, cwd=repo)
+    want = subprocess.run(["git", opt], cwd=repo, env=gb.env, capture_output=True, text=True)
     assert r.rc == 0 and r.out == want.stdout and want.stdout.strip(), (opt, r.text)
-    assert gw.run("git", opt + "=/x", "status", cwd=repo).blocked     # the setting form is checked
+    assert gb.run("git", opt + "=/x", "status", cwd=repo).blocked     # the setting form is checked
 
 
 # ================================ git enters a repository through a child
 # DESIGN-exec-path.md: no route is guessed any more; the claim is that git
 # enters another repository — a submodule, a planted `vendor/x` — through a
-# child process, `<exec-path>/git`, which is gitwary. The same command, the
+# child process, `<exec-path>/git`, which is gitblocker. The same command, the
 # same planting, with the wrapped exec path (the child refuses, the payload
 # never runs) and the raw one (the positive control: the real git's child
 # runs it). A planting and a command for each way the sandbox brings a
@@ -130,38 +130,38 @@ ENTRIES = {
 }
 
 
-def _planted(gw: GW, repo: Path, tmp_path: Path, planting: str) -> Path:
+def _planted(gb: GB, repo: Path, tmp_path: Path, planting: str) -> Path:
     mark = tmp_path / "RAN"
     if planting == "typechange":
-        _typechange_to_repo(gw, repo, mark)
+        _typechange_to_repo(gb, repo, mark)
         return repo
     if planting == "volatile_zone":
-        return _gitlink_in_head_volatile_zone(gw, tmp_path, mark)
-    return _gitlink_in_head(gw, tmp_path, mark)
+        return _gitlink_in_head_volatile_zone(gb, tmp_path, mark)
+    return _gitlink_in_head(gb, tmp_path, mark)
 
 
 @pytest.mark.parametrize("form", sorted(ENTRIES))
-def test_git_enters_a_planted_repository_through_a_child(gw: GW, repo: Path, tmp_path: Path,
+def test_git_enters_a_planted_repository_through_a_child(gb: GB, repo: Path, tmp_path: Path,
                                                          form: str) -> None:
-    """With gitwary at the exec path, the real git's own command does not
-    run the planted repository's config: its child there is gitwary, which
+    """With gitblocker at the exec path, the real git's own command does not
+    run the planted repository's config: its child there is gitblocker, which
     refuses a repository never trusted."""
     planting, cmd = ENTRIES[form]
-    r = _planted(gw, repo, tmp_path, planting)
-    gw.env["GIT_EDITOR"] = EDITOR
-    subprocess.run(["git", *cmd], cwd=r, env=gw.env, capture_output=True)   # wrapped children
+    r = _planted(gb, repo, tmp_path, planting)
+    gb.env["GIT_EDITOR"] = EDITOR
+    subprocess.run(["git", *cmd], cwd=r, env=gb.env, capture_output=True)   # wrapped children
     assert not (tmp_path / "RAN").exists(), f"`git {' '.join(cmd)}` ran the planted config"
 
 
 @pytest.mark.parametrize("form", sorted(ENTRIES))
-def test_git_enters_control_raw_child_runs_it(gw: GW, repo: Path, tmp_path: Path, form: str) -> None:
+def test_git_enters_control_raw_child_runs_it(gb: GB, repo: Path, tmp_path: Path, form: str) -> None:
     """Positive control: the same command with raw children runs it. If this
     fails, git enters this way in-process now, and the barrier is gone for
     that command: DESIGN-exec-path.md, section 6."""
     planting, cmd = ENTRIES[form]
-    r = _planted(gw, repo, tmp_path, planting)
-    gw.env["GIT_EDITOR"] = EDITOR
-    subprocess.run(["git", *cmd], cwd=r, env=gw.raw_env, capture_output=True)
+    r = _planted(gb, repo, tmp_path, planting)
+    gb.env["GIT_EDITOR"] = EDITOR
+    subprocess.run(["git", *cmd], cwd=r, env=gb.raw_env, capture_output=True)
     assert (tmp_path / "RAN").exists(), f"git no longer enters with `git {' '.join(cmd)}`"
 
 
@@ -177,7 +177,7 @@ def test_git_enters_control_raw_child_runs_it(gw: GW, repo: Path, tmp_path: Path
 # by name. A trusted `submodule.active` pathspec activates it for free:
 # [126], the accepted limitation, its record below. Recorded here per
 # command: whether the real git (raw children) runs the nested config, and
-# that gitwary refuses the by-name activation before.
+# that gitblocker refuses the by-name activation before.
 IN_PROCESS = {
     "ls_files": (["ls-files", "--recurse-submodules"], True),
     "grep": (["grep", "--recurse-submodules", "s"], True),
@@ -187,53 +187,53 @@ IN_PROCESS = {
 
 
 @pytest.mark.parametrize("form", sorted(IN_PROCESS))
-def test_in_process_entry_needs_an_activation_gitwary_refuses(gw: GW, repo: Path, tmp_path: Path,
+def test_in_process_entry_needs_an_activation_gitblocker_refuses(gb: GB, repo: Path, tmp_path: Path,
                                                                form: str) -> None:
     mark = tmp_path / "RAN"
-    _typechange_to_repo(gw, repo, mark)
+    _typechange_to_repo(gb, repo, mark)
     (repo / ".gitmodules").write_text('[submodule "f"]\n\tpath = f\n\turl = ./f\n')
-    gw.git("config", "submodule.f.url", str(repo / "f"), cwd=repo)
-    gw.git("config", "submodule.f.active", "true", cwd=repo)
-    assert gw.git("add", "-A", cwd=repo).rc == 0
+    gb.git("config", "submodule.f.url", str(repo / "f"), cwd=repo)
+    gb.git("config", "submodule.f.active", "true", cwd=repo)
+    assert gb.git("add", "-A", cwd=repo).rc == 0
     assert not mark.exists(), "`git add -A` ran the planted config: test_first_add_does_not_execute"
-    r = gw.check(repo)
+    r = gb.check(repo)
     assert r.blocked and "config" in r.err, r.text          # the activation is a watched change
     cmd, runs = IN_PROCESS[form]
-    gw.git(*cmd, cwd=repo)                                  # the real git, raw children
+    gb.git(*cmd, cwd=repo)                                  # the real git, raw children
     assert mark.exists() == runs, (f"`git {' '.join(cmd)}` {'no longer runs' if runs else 'now runs'} "
                                    f"the nested config in-process: update IN_PROCESS and section 6")
 
 
-def test_pathspec_activation_grep_tree_enters_in_process(gw: GW, repo: Path,
+def test_pathspec_activation_grep_tree_enters_in_process(gb: GB, repo: Path,
                                                          tmp_path: Path) -> None:
     """[126]: with a `submodule.active` pathspec already trusted (what `clone
     --recurse-submodules` writes), a gitlink in a tree object is an active
     submodule with no config write, and `grep --recurse-submodules <tree>`
     opens the planted gitdir in-process — no child runs, the wrap judges
     nothing. The real git runs its core.fsmonitor (positive control: the
-    entry exists); through gitwary it does not: PINNED_CONFIG puts
+    entry exists); through gitblocker it does not: PINNED_CONFIG puts
     `core.fsmonitor=false` in GIT_CONFIG_PARAMETERS, which outranks the
-    planted repository's config; GITWARY_KEEP_FSMONITOR lets it through
+    planted repository's config; GITBLOCKER_KEEP_FSMONITOR lets it through
     again. Every other in-process reader executes nothing of it. The
     control failing means git closed the entry ([126] moves to fixed);
     another reader executing means the pin's proof grew (a new entry)."""
     from tests.attacks._helpers import plant_active_gitlink
-    mark = plant_active_gitlink(gw, repo, tmp_path, planting="tree")
+    mark = plant_active_gitlink(gb, repo, tmp_path, planting="tree")
     cmd = ["grep", "--recurse-submodules", "s", "HEAD"]
-    r = subprocess.run(["git", *cmd], cwd=repo, env=gw.raw_env, capture_output=True)
+    r = subprocess.run(["git", *cmd], cwd=repo, env=gb.raw_env, capture_output=True)
     assert r.returncode == 0 and mark.exists(), "grep no longer enters in-process: [126] is closed, move it to fixed"
     mark.unlink()
-    assert gw.run("git", *cmd, cwd=repo).rc == 0
-    assert not mark.exists(), "the planted core.fsmonitor ran through gitwary: the pin is gone"
-    gw.env["GITWARY_KEEP_FSMONITOR"] = "1"
-    assert gw.run("git", *cmd, cwd=repo).rc == 0
-    assert mark.exists(), "GITWARY_KEEP_FSMONITOR no longer lets the hook through: update its doc"
-    del gw.env["GITWARY_KEEP_FSMONITOR"]
+    assert gb.run("git", *cmd, cwd=repo).rc == 0
+    assert not mark.exists(), "the planted core.fsmonitor ran through gitblocker: the pin is gone"
+    gb.env["GITBLOCKER_KEEP_FSMONITOR"] = "1"
+    assert gb.run("git", *cmd, cwd=repo).rc == 0
+    assert mark.exists(), "GITBLOCKER_KEEP_FSMONITOR no longer lets the hook through: update its doc"
+    del gb.env["GITBLOCKER_KEEP_FSMONITOR"]
     for cmd in (["grep", "--recurse-submodules", "s"], ["ls-files", "--recurse-submodules"],
                 ["diff", "--cached", "--submodule=log"], ["rev-list", "--objects", "HEAD"],
                 ["status"]):
         mark.unlink(missing_ok=True)
-        subprocess.run(["git", *cmd], cwd=repo, env=gw.raw_env, capture_output=True)
+        subprocess.run(["git", *cmd], cwd=repo, env=gb.raw_env, capture_output=True)
         assert not mark.exists(), f"`git {' '.join(cmd)}` now executes the planted config: a new entry"
 
 
@@ -274,11 +274,11 @@ def test_new_repo_options_match_git(cmd: str) -> None:
     its own (`--no-tags`, git ≤ 2.48) is the negation of the table's `--x`,
     which is how _long_option reads it."""
     want_long, want_short = _options_from_help(_help(cmd, "-h"))
-    longs, shorts = gw_mod.NEW_REPO_OPTIONS[cmd]
+    longs, shorts = gb_mod.NEW_REPO_OPTIONS[cmd]
     for name in list(want_long):
         base = "--" + name[5:]
         if name.startswith("--no-") and name not in longs and base in longs:
-            assert gw_mod._long_option(name, longs) == (base, True)
+            assert gb_mod._long_option(name, longs) == (base, True)
             want_long[base] = want_long.pop(name)
         elif name.startswith("--no-") and base in longs:
             # `-n, --no-checkout` (git ≤ 2.43): an option named `no-x`,
@@ -296,27 +296,27 @@ def test_new_repo_options_match_git(cmd: str) -> None:
 def test_every_unique_prefix_is_its_option(cmd: str) -> None:
     """[98] parse-options: a unique prefix of a long option is that option,
     an ambiguous one is none; `--no-<prefix>` its negation."""
-    longs = gw_mod.NEW_REPO_OPTIONS[cmd][0]
+    longs = gb_mod.NEW_REPO_OPTIONS[cmd][0]
     for opt in longs:
         for n in range(3, len(opt) + 1):
             pre = opt[:n]
             hits = [o for o in longs if o.startswith(pre)]
-            got = gw_mod._long_option(pre, longs)
+            got = gb_mod._long_option(pre, longs)
             if pre in longs or len(hits) == 1:
                 assert got == ((pre if pre in longs else opt), False), pre
             else:
                 assert got[0] is None or got[0] == pre, (pre, got)
 
 
-def test_abbreviated_template_is_honoured_by_git(gw: GW, tmp_path: Path) -> None:
+def test_abbreviated_template_is_honoured_by_git(gb: GB, tmp_path: Path) -> None:
     """[98] the oracle for the prefix rule: git copies the template's hooks
     with `--te=` (shortest unique prefix for init)."""
     tpl = tmp_path / "tpl"
     (tpl / "hooks").mkdir(parents=True)
     (tpl / "hooks/pre-commit").write_text("#!/bin/sh\n")
-    assert gw.git("init", "-q", f"--te={tpl}", str(tmp_path / "n")).rc == 0
+    assert gb.git("init", "-q", f"--te={tpl}", str(tmp_path / "n")).rc == 0
     assert (tmp_path / "n/.git/hooks/pre-commit").exists()
-    assert gw_mod._long_option("--te", gw_mod.NEW_REPO_OPTIONS["init"][0])[0] == "--template"
+    assert gb_mod._long_option("--te", gb_mod.NEW_REPO_OPTIONS["init"][0])[0] == "--template"
 
 
 # =========================== index extensions git writes vs the parser's rule
@@ -330,32 +330,32 @@ INDEX_FEATURES = {
 
 
 @pytest.mark.parametrize("feature", list(INDEX_FEATURES))
-def test_indexes_git_writes_are_read(gw: GW, repo: Path, feature: str) -> None:
+def test_indexes_git_writes_are_read(gb: GB, repo: Path, feature: str) -> None:
     """[87] KNOWN_REQUIRED_EXTENSIONS: no index git writes in an ordinary
     configuration carries a required extension the parser refuses."""
     pre = INDEX_FEATURES[feature]
     (repo / "u").write_text("u\n")
-    assert gw.git(*pre, "update-index", "--add", "u", cwd=repo).rc == 0
-    assert gw.git(*pre, "status", "-uall", cwd=repo).rc == 0     # writes UNTR, TREE…
-    assert gw_mod.index_entries(repo / ".git/index") == ([], [])
+    assert gb.git(*pre, "update-index", "--add", "u", cwd=repo).rc == 0
+    assert gb.git(*pre, "status", "-uall", cwd=repo).rc == 0     # writes UNTR, TREE…
+    assert gb_mod.index_entries(repo / ".git/index") == ([], [])
 
 
-def test_sparse_index_is_read_split_index_refused(gw: GW, repo: Path) -> None:
+def test_sparse_index_is_read_split_index_refused(gb: GB, repo: Path) -> None:
     """[87] [31] the two required extensions git writes: `sdir` is read
     (its directories returned), `link` refused (a split index)."""
     (repo / "src").mkdir()
     (repo / "vendor").mkdir()
     (repo / "src/a").write_text("a\n")
     (repo / "vendor/b").write_text("b\n")
-    gw.git("add", ".", cwd=repo)
-    gw.git("commit", "-qm", "dirs", cwd=repo)
-    assert gw.git("sparse-checkout", "set", "--cone", "--sparse-index", "src", cwd=repo).rc == 0
+    gb.git("add", ".", cwd=repo)
+    gb.git("commit", "-qm", "dirs", cwd=repo)
+    assert gb.git("sparse-checkout", "set", "--cone", "--sparse-index", "src", cwd=repo).rc == 0
     assert b"sdir" in (repo / ".git/index").read_bytes()
-    assert gw_mod.index_entries(repo / ".git/index") == ([], ["vendor/"])
-    assert gw.git("sparse-checkout", "disable", cwd=repo).rc == 0
-    assert gw.git("update-index", "--split-index", cwd=repo).rc == 0
-    with pytest.raises(gw_mod.Refuse, match="splitIndex"):
-        gw_mod.index_entries(repo / ".git/index")
+    assert gb_mod.index_entries(repo / ".git/index") == ([], ["vendor/"])
+    assert gb.git("sparse-checkout", "disable", cwd=repo).rc == 0
+    assert gb.git("update-index", "--split-index", cwd=repo).rc == 0
+    with pytest.raises(gb_mod.Refuse, match="splitIndex"):
+        gb_mod.index_entries(repo / ".git/index")
 
 
 # ====================================== the inventory: git's own universe
@@ -364,7 +364,7 @@ def test_sparse_index_is_read_split_index_refused(gw: GW, repo: Path) -> None:
 # its hooks and its global options. The bypass catalogue grew one case at a
 # time because that universe was never written down ([19] [51] [55] [83]
 # [88] each a gitdir name, [56] a pathname key, [97] a global option). Here
-# every item must be classified; an item git knows and gitwary does not
+# every item must be classified; an item git knows and gitblocker does not
 # fails first. On a git upgrade: regenerate, diff, classify the new lines.
 INVENTORY = sorted((Path(__file__).parent / "inventory").glob("git-*.txt"))[-1]
 
@@ -383,7 +383,7 @@ def _inventory(section: str) -> list[str]:
     return items
 
 
-# Gitdir names git opens that gitwary hashes on purpose, or refuses: the
+# Gitdir names git opens that gitblocker hashes on purpose, or refuses: the
 # classification that is neither "volatile" nor "read as instructions".
 GITDIR_HASHED = {
     "config": "the trusted config itself",
@@ -430,8 +430,8 @@ GITDIR_HASHED = {
 
 def _volatile_at(rel: str) -> bool:
     parts = rel.split("/")
-    return any(gw_mod._volatile_dir("/".join(parts[:i])) for i in range(1, len(parts))) \
-        or gw_mod._volatile_dir(rel) or gw_mod._volatile_file(rel, False)
+    return any(gb_mod._volatile_dir("/".join(parts[:i])) for i in range(1, len(parts))) \
+        or gb_mod._volatile_dir(rel) or gb_mod._volatile_file(rel, False)
 
 
 @pytest.mark.parametrize("name", _inventory("gitdir"))
@@ -441,17 +441,17 @@ def test_every_gitdir_name_git_opens_is_classified(name: str) -> None:
     hashed/refused on purpose (GITDIR_HASHED). An unclassified name is a
     future [19] (instructions in a volatile zone) or a future [100] (a
     false positive on an ordinary command)."""
-    if name in gw_mod.VOLATILE_READERS:
+    if name in gb_mod.VOLATILE_READERS:
         return
     if _volatile_at(name):
         return
-    assert name in GITDIR_HASHED, f"{name}: git opens it under a gitdir, gitwary has no classification"
+    assert name in GITDIR_HASHED, f"{name}: git opens it under a gitdir, gitblocker has no classification"
 
 
 def test_every_reader_file_is_volatile() -> None:
     """A reader is for a file the fingerprint cannot hold: each one must
     sit in a volatile zone (otherwise the hash already covers it)."""
-    for rel in gw_mod.VOLATILE_READERS:
+    for rel in gb_mod.VOLATILE_READERS:
         assert _volatile_at(rel), rel
 
 
@@ -466,9 +466,9 @@ def test_every_pathname_key_is_classified(key: str) -> None:
     reads hooks from (DIR_KEYS), a file git reads as data (DATA_KEYS, never
     watched: the [56] trap) or a program (PATHNAME_PROGRAMS)."""
     section, _, k = key.rpartition(".")
-    if (section, k) in gw_mod.DIR_KEYS or gw_mod._data_key(section, k):
+    if (section, k) in gb_mod.DIR_KEYS or gb_mod._data_key(section, k):
         return
-    assert key in PATHNAME_PROGRAMS, f"{key}: a pathname key gitwary has not classified"
+    assert key in PATHNAME_PROGRAMS, f"{key}: a pathname key gitblocker has not classified"
 
 
 def test_value_keys_are_the_inventory() -> None:
@@ -476,24 +476,24 @@ def test_value_keys_are_the_inventory() -> None:
     inventory: a key git reads as a boolean or a number, taken from its
     source, nothing curated by hand. A new git adds keys here first."""
     want = set(_inventory("bool")) | set(_inventory("int"))
-    assert set(gw_mod.VALUE_KEYS) == want, (set(gw_mod.VALUE_KEYS) ^ want)
-    assert gw_mod._value_key("core", "bare") and gw_mod._value_key("http", "sslverify")
-    assert gw_mod._value_key("http.https://x/", "sslverify")
-    assert not gw_mod._value_key("user", "name") and not gw_mod._value_key("core", "pager")
+    assert set(gb_mod.VALUE_KEYS) == want, (set(gb_mod.VALUE_KEYS) ^ want)
+    assert gb_mod._value_key("core", "bare") and gb_mod._value_key("http", "sslverify")
+    assert gb_mod._value_key("http.https://x/", "sslverify")
+    assert not gb_mod._value_key("user", "name") and not gb_mod._value_key("core", "pager")
 
 
 @pytest.mark.parametrize("hook", _inventory("hooks"))
-def test_every_hook_under_a_tree_hookspath_is_watched(gw: GW, repo: Path, hook: str) -> None:
+def test_every_hook_under_a_tree_hookspath_is_watched(gb: GB, repo: Path, hook: str) -> None:
     """[1] for every hook git documents: under a core.hooksPath in the tree,
     rewriting it is seen."""
     from tests.conftest import write_exec
     p = repo / ".githooks" / hook
     write_exec(p)
-    assert gw.git("config", "core.hooksPath", ".githooks", cwd=repo).rc == 0
-    gw.trust(repo)
-    assert not gw.check(repo).blocked
+    assert gb.git("config", "core.hooksPath", ".githooks", cwd=repo).rc == 0
+    gb.trust(repo)
+    assert not gb.check(repo).blocked
     p.write_text("#!/bin/sh\ntouch RAN\n")
-    assert gw.check(repo).blocked, hook
+    assert gb.check(repo).blocked, hook
 
 
 # Every call that takes a git out of its command's process tree —
@@ -556,27 +556,27 @@ def test_keep_attached_disarms_the_detach(cmd: list[str], detach: str | None,
     the tree: `maintenance run --detach` -> `--no-detach`, `gc` -> prefixed
     with `-c gc.autoDetach=false`. A command that does not daemonize is left
     untouched."""
-    out = gw_mod.keep_attached(list(cmd), Path.cwd())
+    out = gb_mod.keep_attached(list(cmd), Path.cwd())
     assert no_detach in out
     if detach is not None:
         assert detach not in out
-    assert gw_mod.keep_attached(["status"], Path.cwd()) == ["status"]
+    assert gb_mod.keep_attached(["status"], Path.cwd()) == ["status"]
 
 
 @pytest.mark.skipif(not git_has("detach"), reason="git without `maintenance run --detach`")
 @pytest.mark.parametrize("abbr", ["--det", "--d"])
-def test_keep_attached_disarms_an_abbreviated_detach(gw: GW, repo: Path, abbr: str) -> None:
+def test_keep_attached_disarms_an_abbreviated_detach(gb: GB, repo: Path, abbr: str) -> None:
     """[132] parse-options takes any unique prefix of a long option: git
     accepts `--det` and `--d` for `maintenance run` where it refuses
     `--detx` (the oracle), and detaches on them. keep_attached reads them
     as `--detach` (_long_option, as clone, init and push are read); a value
     of `--task`/`--schedule` is never an option, `--no-det` and anything
     after `--` are left alone."""
-    assert gw.git("maintenance", "run", "--detx", "--auto", cwd=repo).rc == 129
-    assert gw.git("maintenance", "run", abbr, "--auto", cwd=repo).rc == 0
-    out = gw_mod.keep_attached(["maintenance", "run", abbr, "--auto"], repo)
+    assert gb.git("maintenance", "run", "--detx", "--auto", cwd=repo).rc == 129
+    assert gb.git("maintenance", "run", abbr, "--auto", cwd=repo).rc == 0
+    out = gb_mod.keep_attached(["maintenance", "run", abbr, "--auto"], repo)
     assert "--no-detach" in out and abbr not in out, out
-    k = lambda *a: gw_mod.keep_attached(["maintenance", "run", *a], repo)[2:]
+    k = lambda *a: gb_mod.keep_attached(["maintenance", "run", *a], repo)[2:]
     assert k("--task", abbr) == ["--task", abbr]
     assert k("--task=" + abbr, abbr) == ["--task=" + abbr, "--no-detach"]
     assert k("--no-det") == ["--no-det"]
@@ -584,60 +584,60 @@ def test_keep_attached_disarms_an_abbreviated_detach(gw: GW, repo: Path, abbr: s
     assert k("-q", abbr, "--auto") == ["-q", "--no-detach", "--auto"]
 
 
-def test_git_prefix_is_what_git_substitutes(gw: GW, repo: Path, monkeypatch) -> None:
+def test_git_prefix_is_what_git_substitutes(gb: GB, repo: Path, monkeypatch) -> None:
     """[128] git_prefix(), asked of the real git outside any repository, is
     what git substitutes for `%(prefix)/` inside one, with the user's config
     in place; GIT_EXEC_PATH (the wrapped one, in the suite) moves nothing."""
-    gw_mod._PREFIX.clear()
-    for k, v in gw.env.items():
+    gb_mod._PREFIX.clear()
+    for k, v in gb.env.items():
         monkeypatch.setenv(k, v)
-    want = gw.git("-c", "x.p=%(prefix)/", "config", "--type=path", "x.p", cwd=repo).out.strip()
+    want = gb.git("-c", "x.p=%(prefix)/", "config", "--type=path", "x.p", cwd=repo).out.strip()
     assert want.startswith("/"), want
-    assert gw_mod.git_prefix() == (want.rstrip("/") or "/")
-    assert gw_mod.git_prefix() is gw_mod._PREFIX[0]                 # cached
-    gw_mod._PREFIX.clear()
+    assert gb_mod.git_prefix() == (want.rstrip("/") or "/")
+    assert gb_mod.git_prefix() is gb_mod._PREFIX[0]                 # cached
+    gb_mod._PREFIX.clear()
 
 
-def test_git_prefix_not_asked_without_the_mark(gw: GW, repo: Path, monkeypatch) -> None:
+def test_git_prefix_not_asked_without_the_mark(gb: GB, repo: Path, monkeypatch) -> None:
     """[128] a repository whose config carries no `%(prefix)/` never runs
     git for the prefix: the scan stays free of any process."""
-    for k, v in gw.env.items():
+    for k, v in gb.env.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.setattr(gw_mod, "STATE", gw.state)
+    monkeypatch.setattr(gb_mod, "STATE", gb.state)
     def boom() -> str:
         raise AssertionError("git_prefix called")
-    monkeypatch.setattr(gw_mod, "git_prefix", boom)
-    assert gw.git("config", "core.hooksPath", ".githooks", cwd=repo).rc == 0
-    assert gw.git("config", "--global", "include.path", "~/inc.cfg").rc == 0
-    gw_mod.config_refs(gw_mod.open_repo(repo))
+    monkeypatch.setattr(gb_mod, "git_prefix", boom)
+    assert gb.git("config", "core.hooksPath", ".githooks", cwd=repo).rc == 0
+    assert gb.git("config", "--global", "include.path", "~/inc.cfg").rc == 0
+    gb_mod.config_refs(gb_mod.open_repo(repo))
 
 
-def test_maintenance_run_options_match_git(gw: GW, repo: Path) -> None:
+def test_maintenance_run_options_match_git(gb: GB, repo: Path) -> None:
     """[132] MAINTENANCE_RUN_OPTIONS is `git maintenance run -h` (in a
     repository: git 2.47 wants one even for `-h`): every long option, and
     whether it takes a value (`<...>`). An option git adds is a prefix
     keep_attached would resolve wrongly: fails here first."""
-    r = gw.git("maintenance", "run", "-h", cwd=repo)
+    r = gb.git("maintenance", "run", "-h", cwd=repo)
     opts = {"--" + m.group(1): bool(m.group(2)) for m in re.finditer(
         r"^\s+(?:-\w, )?--(?:\[no-\])?([\w-]+)((?: <[^>]+>)?)", r.text, re.M)}
     if not git_has("detach"):
         opts["--detach"] = False         # 2.47's; an older git dies on it and on its prefixes
-    assert opts == gw_mod.MAINTENANCE_RUN_OPTIONS, opts
+    assert opts == gb_mod.MAINTENANCE_RUN_OPTIONS, opts
 
 
 def test_inventory_global_options_are_known() -> None:
     """[97] every option git.c's handle_options compares `cmd` to is one
-    gitwary interprets (the `git --help` oracle above sees only the usage
+    gitblocker interprets (the `git --help` oracle above sees only the usage
     text; the source names them all)."""
     opts = set(_inventory("options"))
-    known = (gw_mod.GLOBAL_FLAGS | gw_mod.GLOBAL_WITH_ARG | gw_mod.GLOBAL_STOP | {"--bare"}
-             | {o.rstrip("=") for o in gw_mod.GLOBAL_WITH_EQ})
+    known = (gb_mod.GLOBAL_FLAGS | gb_mod.GLOBAL_WITH_ARG | gb_mod.GLOBAL_STOP | {"--bare"}
+             | {o.rstrip("=") for o in gb_mod.GLOBAL_WITH_EQ})
     assert opts <= known, sorted(opts - known)
 
 
 # Config keys whose value git runs: no single signature in git's source (the
 # inventory has no [program] section), curated from Documentation/config.
-# The rule in gitwary is generic — any token of any value that is an
+# The rule in gitblocker is generic — any token of any value that is an
 # existing file is watched, no list — and this corpus proves it reaches each
 # key's value syntax (`!` aliases, `%f` placeholders, a `-c` pair).
 PROGRAM_KEYS = {
@@ -659,14 +659,14 @@ PROGRAM_KEYS = {
 
 
 @pytest.mark.parametrize("key", sorted(PROGRAM_KEYS))
-def test_program_key_naming_a_tree_script_is_watched(gw: GW, repo: Path, key: str) -> None:
+def test_program_key_naming_a_tree_script_is_watched(gb: GB, repo: Path, key: str) -> None:
     from tests.conftest import write_exec
     write_exec(repo / "t.sh")
-    assert gw.git("config", key, PROGRAM_KEYS[key].format(p="./t.sh"), cwd=repo).rc == 0
-    gw.trust(repo)
-    assert not gw.check(repo).blocked
+    assert gb.git("config", key, PROGRAM_KEYS[key].format(p="./t.sh"), cwd=repo).rc == 0
+    gb.trust(repo)
+    assert not gb.check(repo).blocked
     (repo / "t.sh").write_text("#!/bin/sh\ntouch RAN\n")
-    assert gw.check(repo).blocked, key
+    assert gb.check(repo).blocked, key
 
 
 # ================= [156] the child git runs in a repository it borrows from
@@ -677,41 +677,41 @@ def test_program_key_naming_a_tree_script_is_watched(gw: GW, repo: Path, key: st
 # by the clone — runs nothing that config names. One program key at a time,
 # the real git and its raw child, no pin; the control is the same payload
 # reached through an alias in that mirror.
-def _mirror_with(gw: GW, tmp_path: Path, key: str) -> tuple[Path, Path, Path]:
+def _mirror_with(gb: GB, tmp_path: Path, key: str) -> tuple[Path, Path, Path]:
     from tests.attacks._helpers import commit, make_source, payload
-    src = make_source(gw, tmp_path, "upstream")
-    commit(gw, src)
+    src = make_source(gb, tmp_path, "upstream")
+    commit(gb, src)
     mirror = tmp_path / "mirror.git"
-    assert gw.git("clone", "-q", "--mirror", str(src), str(mirror)).rc == 0
-    assert gw.git("config", key, PROGRAM_KEYS[key].format(p=payload(tmp_path)), cwd=mirror).rc == 0
+    assert gb.git("clone", "-q", "--mirror", str(src), str(mirror)).rc == 0
+    assert gb.git("config", key, PROGRAM_KEYS[key].format(p=payload(tmp_path)), cwd=mirror).rc == 0
     return src, mirror, tmp_path / "RAN"
 
 
 @pytest.mark.parametrize("key", sorted(PROGRAM_KEYS))
-def test_alternate_refs_child_runs_nothing_of_the_mirror(gw: GW, tmp_path: Path, key: str) -> None:
-    src, mirror, ran = _mirror_with(gw, tmp_path, key)
-    gw.env["GIT_TRACE"] = "1"
-    r = gw.git("clone", "-q", "--reference", str(mirror), f"file://{src}", str(tmp_path / "dst"))
+def test_alternate_refs_child_runs_nothing_of_the_mirror(gb: GB, tmp_path: Path, key: str) -> None:
+    src, mirror, ran = _mirror_with(gb, tmp_path, key)
+    gb.env["GIT_TRACE"] = "1"
+    r = gb.git("clone", "-q", "--reference", str(mirror), f"file://{src}", str(tmp_path / "dst"))
     assert r.rc == 0, r.text
     assert f"--git-dir={mirror.resolve()} for-each-ref --format=%(objectname)" in r.err.replace("'", ""), \
         f"git no longer lists a mirror's refs through this child: alternate_repos, DESIGN.md\n{r.err}"
     assert not ran.exists(), f"`for-each-ref` in the mirror ran its {key}: the clone's first use is no longer safe"
 
 
-def test_alternate_refs_child_runs_no_hook_of_the_mirror(gw: GW, tmp_path: Path) -> None:
+def test_alternate_refs_child_runs_no_hook_of_the_mirror(gb: GB, tmp_path: Path) -> None:
     from tests.attacks._helpers import PLANTED_HOOKS, payload
-    src, mirror, ran = _mirror_with(gw, tmp_path, "core.pager")
+    src, mirror, ran = _mirror_with(gb, tmp_path, "core.pager")
     for h in PLANTED_HOOKS:
         os.symlink(payload(tmp_path), mirror / "hooks" / h)
-    assert gw.git("clone", "-q", "--reference", str(mirror), f"file://{src}", str(tmp_path / "dst")).rc == 0
+    assert gb.git("clone", "-q", "--reference", str(mirror), f"file://{src}", str(tmp_path / "dst")).rc == 0
     assert not ran.exists(), "`for-each-ref` in the mirror ran one of its hooks"
 
 
-def test_alternate_refs_control_the_mirror_config_is_live(gw: GW, tmp_path: Path) -> None:
+def test_alternate_refs_control_the_mirror_config_is_live(gb: GB, tmp_path: Path) -> None:
     """Positive control: the payload does run when git is asked to run
     something of that config."""
-    _, mirror, ran = _mirror_with(gw, tmp_path, "alias.x")
-    gw.git(f"--git-dir={mirror}", "x", cwd=tmp_path)
+    _, mirror, ran = _mirror_with(gb, tmp_path, "alias.x")
+    gb.git(f"--git-dir={mirror}", "x", cwd=tmp_path)
     assert ran.exists()
 
 
@@ -722,22 +722,22 @@ def test_value_key_wildcards_match_their_section() -> None:
     value key; the section's own string keys (`notes.rewriteMode`) are
     not. test_value_keys_are_the_inventory holds the set of strings, this
     holds the lookup."""
-    wild = {k for k in gw_mod.VALUE_KEYS if k.endswith(".")}
+    wild = {k for k in gb_mod.VALUE_KEYS if k.endswith(".")}
     assert wild == {"notes.rewrite."}, wild
-    assert gw_mod._value_key("notes.rewrite", "amend") and gw_mod._value_key("notes.rewrite", "rebase")
-    assert not gw_mod._value_key("notes", "rewritemode") and not gw_mod._value_key("notes", "rewrite")
+    assert gb_mod._value_key("notes.rewrite", "amend") and gb_mod._value_key("notes.rewrite", "rebase")
+    assert not gb_mod._value_key("notes", "rewritemode") and not gb_mod._value_key("notes", "rewrite")
 
 
 @pytest.mark.parametrize("value", ["0b11", "0b0", "0B1", "-0b1k"])
-def test_maybe_bool_reads_binary_literals_as_git(gw: GW, repo: Path, value: str) -> None:
+def test_maybe_bool_reads_binary_literals_as_git(gb: GB, repo: Path, value: str) -> None:
     """[141] git_parse_signed is strtoimax(…, 0): a libc with C23's strtol
     (glibc ≥ 2.38) reads `0b11` as 3, so `--type=bool` says true; another
     (macOS) dies on it. _git_maybe_bool read no `0b` and called it a path
     token (a tree file named `0b11` watched; GIT_CONFIG_NOSYSTEM=0b11 not
     honoured). It reads it as a number: where git dies nothing runs, so
     the answer is safe on every libc; where git reads it, they agree."""
-    r = gw.git("-c", f"x.y={value}", "config", "--type=bool", "--get", "x.y", cwd=repo)
-    got = gw_mod._git_maybe_bool(value)
+    r = gb.git("-c", f"x.y={value}", "config", "--type=bool", "--get", "x.y", cwd=repo)
+    got = gb_mod._git_maybe_bool(value)
     assert got is not None, value
     if r.rc == 0:
         assert got is (r.out.strip() == "true"), (value, r.text)
@@ -745,37 +745,37 @@ def test_maybe_bool_reads_binary_literals_as_git(gw: GW, repo: Path, value: str)
         assert "bad boolean" in r.err, r.text
 
 
-def test_gc_options_match_git(gw: GW, repo: Path) -> None:
+def test_gc_options_match_git(gb: GB, repo: Path) -> None:
     """[142] GC_OPTIONS is `git gc -h`: every long option and whether it
     takes a separate value (`<...>` after a space; `--prune[=<date>]` takes
     none). An option of a newer git (`--expire-to`, 2.50) may be in the
     table and not in an older git's help, never the reverse."""
-    r = gw.git("gc", "-h", cwd=repo)
+    r = gb.git("gc", "-h", cwd=repo)
     opts = {"--" + m.group(1): bool(m.group(2)) for m in re.finditer(
         r"^\s+(?:-\w, )?--(?:\[no-\])?([\w-]+)((?: <[^>]+>)?)", r.text, re.M)}
     newer = {"--expire-to"} | (set() if git_has("detach") else {"--detach", "--max-cruft-size"})
     assert ("--detach" in opts) == git_has("detach"), r.text
-    assert opts.items() <= gw_mod.GC_OPTIONS.items(), (opts, gw_mod.GC_OPTIONS)
-    assert set(gw_mod.GC_OPTIONS) - set(opts) <= newer, set(gw_mod.GC_OPTIONS) - set(opts)
+    assert opts.items() <= gb_mod.GC_OPTIONS.items(), (opts, gb_mod.GC_OPTIONS)
+    assert set(gb_mod.GC_OPTIONS) - set(opts) <= newer, set(gb_mod.GC_OPTIONS) - set(opts)
 
 
 @pytest.mark.parametrize("abbr", ["--detach", "--det", "--d"])
-def test_keep_attached_disarms_gc_detach(gw: GW, repo: Path, abbr: str) -> None:
+def test_keep_attached_disarms_gc_detach(gb: GB, repo: Path, abbr: str) -> None:
     """[142] `gc.autoDetach = false` is a default an explicit `--detach`
     (any unique prefix) overrides: a child `git gc --detach` left the
     process tree with the `-c` in place ([117] again). The flag is
     rewritten as for `maintenance run` ([132]), the `-c` stays for `--auto`
     and is placed after the command's own options, so a `-c
     gc.autoDetach=true` of a hook does not win over it either."""
-    assert gw.git("gc", "--detx", cwd=repo).rc == 129
-    out = gw_mod.keep_attached(["gc", abbr], repo)
+    assert gb.git("gc", "--detx", cwd=repo).rc == 129
+    out = gb_mod.keep_attached(["gc", abbr], repo)
     assert "--no-detach" in out and abbr not in out and "gc.autoDetach=false" in out, out
-    k = lambda *a: gw_mod.keep_attached(["gc", *a], repo)
+    k = lambda *a: gb_mod.keep_attached(["gc", *a], repo)
     assert k("--no-det")[-2:] == ["gc", "--no-det"]
     assert k("--", abbr)[-3:] == ["gc", "--", abbr]
     assert k("--expire-to", abbr)[-3:] == ["gc", "--expire-to", abbr]
     assert k("--prune", abbr)[-3:] == ["gc", "--prune", "--no-detach"]
-    out = gw_mod.keep_attached(["-c", "gc.autoDetach=true", "gc", "--auto"], repo)
+    out = gb_mod.keep_attached(["-c", "gc.autoDetach=true", "gc", "--auto"], repo)
     assert out.index("gc.autoDetach=false") > out.index("gc.autoDetach=true"), out
 
 
@@ -784,18 +784,18 @@ REF_KEYS = {"branch.main.merge": "a refname git resolves through the ref store (
 
 
 @pytest.mark.parametrize("key", sorted(REF_KEYS))
-def test_ref_key_naming_a_tree_script_runs_nothing(gw: GW, repo: Path, key: str) -> None:
+def test_ref_key_naming_a_tree_script_runs_nothing(gb: GB, repo: Path, key: str) -> None:
     """A key excluded as a refname must never make git open its value as a
     path: with the value naming a tree script, pull, fetch, push, merge and
     status run nothing (the inverse of test_program_key_naming_a_tree_script_is_watched)."""
     from tests.conftest import write_exec
     write_exec(repo / "t.sh", "#!/bin/sh\ntouch RAN\n")
     section, _, k = key.rpartition(".")
-    assert gw_mod._data_key(section, k), key
-    assert gw.git("config", key, "./t.sh", cwd=repo).rc == 0
-    assert gw.git("config", "branch.main.remote", ".", cwd=repo).rc == 0
+    assert gb_mod._data_key(section, k), key
+    assert gb.git("config", key, "./t.sh", cwd=repo).rc == 0
+    assert gb.git("config", "branch.main.remote", ".", cwd=repo).rc == 0
     for cmd in (["status"], ["fetch"], ["pull"], ["merge"], ["push"], ["branch", "-vv"]):
-        gw.git(*cmd, cwd=repo)
+        gb.git(*cmd, cwd=repo)
     assert not (repo / "RAN").exists(), key
 
 
@@ -818,9 +818,9 @@ URL_CLASS = {
 
 
 @pytest.mark.parametrize("url", sorted(URL_CLASS))
-def test_network_url_classification_as_git(gw: GW, repo: Path, url: str) -> None:
-    assert gw_mod._network_url(url) == URL_CLASS[url], url
-    r = gw.git("-c", "core.sshCommand=false", "ls-remote", url, cwd=repo)
+def test_network_url_classification_as_git(gb: GB, repo: Path, url: str) -> None:
+    assert gb_mod._network_url(url) == URL_CLASS[url], url
+    r = gb.git("-c", "core.sshCommand=false", "ls-remote", url, cwd=repo)
     assert r.rc != 0
     helper_or_path = ("remote helper" in r.err or "does not appear to be a git repository" in r.err
                       or "No such file" in r.err or "not a git repository" in r.err
@@ -850,60 +850,60 @@ SEQUENCE_END_ARGS = [("rebase", "--abort"), ("rebase", "--quit"), ("rebase", "--
                      ("rebase", "--show-current-patch")]
 
 
-def _rebase_stopped_with_exec(gw: GW, repo: Path, proof: Path) -> None:
+def _rebase_stopped_with_exec(gb: GB, repo: Path, proof: Path) -> None:
     for i in range(3):
         (repo / "r").write_text(f"{i}\n")
-        gw.git("add", "r", cwd=repo)
-        gw.git("commit", "-qm", f"r{i}", cwd=repo)
-    r = gw.git("rebase", "-x", f"touch {proof}; false", "HEAD~2", cwd=repo)
+        gb.git("add", "r", cwd=repo)
+        gb.git("commit", "-qm", f"r{i}", cwd=repo)
+    r = gb.git("rebase", "-x", f"touch {proof}; false", "HEAD~2", cwd=repo)
     assert r.rc != 0 and proof.exists(), r.text
     proof.unlink()
 
 
 def test_never_resumes_is_classified() -> None:
-    assert set(NEVER_RESUMES_ARGS) == set(gw_mod.NEVER_RESUMES)
-    assert {(c, o) for c, opts in gw_mod.SEQUENCE_ENDS.items() for o in opts} >= set(SEQUENCE_END_ARGS)
+    assert set(NEVER_RESUMES_ARGS) == set(gb_mod.NEVER_RESUMES)
+    assert {(c, o) for c, opts in gb_mod.SEQUENCE_ENDS.items() for o in opts} >= set(SEQUENCE_END_ARGS)
 
 
 @pytest.mark.parametrize("cmd", sorted(NEVER_RESUMES_ARGS) + [" ".join(a) for a in SEQUENCE_END_ARGS])
-def test_never_resumes_runs_no_todo_line(gw: GW, repo: Path, tmp_path: Path, cmd: str) -> None:
-    """Each command gitwary lets through a stopped sequence unread runs no
+def test_never_resumes_runs_no_todo_line(gb: GB, repo: Path, tmp_path: Path, cmd: str) -> None:
+    """Each command gitblocker lets through a stopped sequence unread runs no
     line of the todo when the raw git runs it: the claim behind
     NEVER_RESUMES and SEQUENCE_ENDS."""
     proof = tmp_path / "RAN"
-    _rebase_stopped_with_exec(gw, repo, proof)
+    _rebase_stopped_with_exec(gb, repo, proof)
     argv = cmd.split() if " " in cmd else [cmd, *NEVER_RESUMES_ARGS[cmd]]
-    env = {**gw.raw_env, "GIT_EDITOR": "true", "GIT_PAGER": "cat"}
+    env = {**gb.raw_env, "GIT_EDITOR": "true", "GIT_PAGER": "cat"}
     subprocess.run(["git", *argv], cwd=repo, env=env, capture_output=True, text=True, timeout=60)
     assert not proof.exists(), f"`git {' '.join(argv)}` ran a todo line"
-    r = gw.git("rebase", "--continue", cwd=repo)            # the positive control
+    r = gb.git("rebase", "--continue", cwd=repo)            # the positive control
     assert proof.exists() or "no rebase in progress" in r.err.lower(), (argv, r.text)
 
 
 # ================================ the way out of a split index ([148])
 @pytest.mark.parametrize("argv", [["update-index", "--no-split-index"],
                                   ["config", "--unset", "core.splitIndex"]], ids=["update-index", "config"])
-def test_split_index_repair_enters_no_nested_repository(gw: GW, repo: Path, tmp_path: Path, argv) -> None:
-    """The two commands gitwary lets through a split index (`link`, whose
+def test_split_index_repair_enters_no_nested_repository(gb: GB, repo: Path, tmp_path: Path, argv) -> None:
+    """The two commands gitblocker lets through a split index (`link`, whose
     gitlinks it cannot read) must not open a nested repository: a planted
     one, named by a gitlink of the split index, with a config that runs
     something, runs nothing under them. Positive control: `status` runs it."""
     from tests.test_nested import plant_nested
     mark = tmp_path / "EXEC"
-    plant_nested(gw, repo, mark)
-    assert gw.git("add", "-A", cwd=repo).rc == 0
-    assert gw.git("config", "core.splitIndex", "true", cwd=repo).rc == 0
-    assert gw.git("update-index", "--split-index", cwd=repo).rc == 0
+    plant_nested(gb, repo, mark)
+    assert gb.git("add", "-A", cwd=repo).rc == 0
+    assert gb.git("config", "core.splitIndex", "true", cwd=repo).rc == 0
+    assert gb.git("update-index", "--split-index", cwd=repo).rc == 0
     assert list((repo / ".git").glob("sharedindex.*")) and not mark.exists()
-    gw.git(*argv, cwd=repo)
+    gb.git(*argv, cwd=repo)
     assert not mark.exists(), f"`git {' '.join(argv)}` opened the nested repository"
-    gw.git("status", "--short", cwd=repo)
+    gb.git("status", "--short", cwd=repo)
     assert mark.exists(), "invalid control: git no longer opens the nested repository"
 
 
 # =============================== absorbgitdirs under the pin ([149])
-def test_absorbgitdirs_runs_only_the_pinned_fsmonitor(gw: GW, repo: Path, tmp_path: Path) -> None:
-    """gitwary lets `submodule absorbgitdirs` through a nested repository
+def test_absorbgitdirs_runs_only_the_pinned_fsmonitor(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """gitblocker lets `submodule absorbgitdirs` through a nested repository
     because, the fsmonitor pinned off, it runs nothing of it: a planted
     nested repository with an fsmonitor and every hook, absorbed by the raw
     git with the pin, leaves no trace. Positive control: without the pin,
@@ -912,79 +912,79 @@ def test_absorbgitdirs_runs_only_the_pinned_fsmonitor(gw: GW, repo: Path, tmp_pa
     for pin, expect in ((True, False), (False, True)):
         r = repo if pin else tmp_path / "ctl"
         if not pin:
-            assert gw.git("init", "-q", str(r)).rc == 0
+            assert gb.git("init", "-q", str(r)).rc == 0
             (r / "f").write_text("a\n")
-            gw.git("add", "f", cwd=r)
-            assert gw.git("commit", "-qm", "i", cwd=r).rc == 0
+            gb.git("add", "f", cwd=r)
+            assert gb.git("commit", "-qm", "i", cwd=r).rc == 0
         mark = tmp_path / f"EXEC-{pin}"
-        plant_nested(gw, r, mark)
-        assert gw.git("add", "-A", cwd=r).rc == 0
+        plant_nested(gb, r, mark)
+        assert gb.git("add", "-A", cwd=r).rc == 0
         (r / ".gitmodules").write_text('[submodule "vendor"]\n\tpath = vendor\n\turl = ./vendor\n')
         pre = ["-c", "core.fsmonitor=false"] if pin else []
-        assert gw.git(*pre, "submodule", "absorbgitdirs", cwd=r).rc == 0
+        assert gb.git(*pre, "submodule", "absorbgitdirs", cwd=r).rc == 0
         assert (r / "vendor/.git").is_file()
         assert mark.exists() == expect, ("pin" if pin else "control", mark.exists())
 
 
 # ================== the notes of a stopped `notes merge` are data ([153])
-def _stopped_notes_merge(gw: GW, repo: Path) -> Path:
+def _stopped_notes_merge(gb: GB, repo: Path) -> Path:
     """The note git left to resolve."""
-    conflicting_notes(gw, repo)
-    assert gw.git("notes", "merge", "other", cwd=repo).rc != 0
+    conflicting_notes(gb, repo)
+    assert gb.git("notes", "merge", "other", cwd=repo).rc != 0
     (note,) = (repo / ".git/NOTES_MERGE_WORKTREE").iterdir()
     return note
 
 
-def test_notes_merge_hashes_the_note_and_runs_nothing(gw: GW, repo: Path, tmp_path: Path) -> None:
+def test_notes_merge_hashes_the_note_and_runs_nothing(gb: GB, repo: Path, tmp_path: Path) -> None:
     """A file excluded as `NOTES_MERGE_WORKTREE/<oid>` is hashed into a
     blob, never run: the note replaced by an executable script, `status`
     and `notes merge --commit` run nothing and the note is the script's
     text."""
     from tests.conftest import write_exec
-    note, mark = _stopped_notes_merge(gw, repo), tmp_path / "RAN"
+    note, mark = _stopped_notes_merge(gb, repo), tmp_path / "RAN"
     write_exec(note, f"#!/bin/sh\ntouch {mark}\n")
-    gw.git("status", cwd=repo)
-    assert gw.git("notes", "merge", "--commit", cwd=repo).rc == 0
+    gb.git("status", cwd=repo)
+    assert gb.git("notes", "merge", "--commit", cwd=repo).rc == 0
     assert not mark.exists()
-    assert gw.git("notes", "show", "HEAD", cwd=repo).out == f"#!/bin/sh\ntouch {mark}\n"
+    assert gb.git("notes", "show", "HEAD", cwd=repo).out == f"#!/bin/sh\ntouch {mark}\n"
 
 
-def test_notes_merge_reads_what_stays_an_entry(gw: GW, repo: Path, tmp_path: Path) -> None:
+def test_notes_merge_reads_what_stays_an_entry(gb: GB, repo: Path, tmp_path: Path) -> None:
     """The two names beside the notes that are not excluded, and why: a
     `.gitattributes` there chooses the clean filter `notes merge --commit`
     runs on a note (the filter is the trusted config's; which files it
     runs on is the sandbox's), and a symlink named like an object is read
     through — a file outside the repository becomes a note."""
-    note, mark = _stopped_notes_merge(gw, repo), tmp_path / "RAN"
-    assert gw.git("config", "filter.x.clean", f"touch {mark}; cat", cwd=repo).rc == 0
+    note, mark = _stopped_notes_merge(gb, repo), tmp_path / "RAN"
+    assert gb.git("config", "filter.x.clean", f"touch {mark}; cat", cwd=repo).rc == 0
     (note.parent / ".gitattributes").write_text("* filter=x\n")
     secret, other = tmp_path / "secret", "a" * len(note.name)
     secret.write_text("key\n")
     (note.parent / other).symlink_to(secret)
-    assert gw.git("notes", "merge", "--commit", cwd=repo).rc == 0
+    assert gb.git("notes", "merge", "--commit", cwd=repo).rc == 0
     assert mark.exists(), "invalid control: no clean filter on a note any more"
-    assert gw.git("notes", "show", other, cwd=repo).out == "key\n", \
+    assert gb.git("notes", "show", other, cwd=repo).out == "key\n", \
         "invalid control: a symlinked note is no longer read through"
 
 
 # ===================== the pointers a `git worktree` command writes ([155])
-@pytest.mark.parametrize("sub", sorted(gw_mod.WORKTREE_WRITES))
-def test_worktree_command_writes_its_pointers_and_nothing_else(gw: GW, repo: Path, tmp_path: Path,
+@pytest.mark.parametrize("sub", sorted(gb_mod.WORKTREE_WRITES))
+def test_worktree_command_writes_its_pointers_and_nothing_else(gb: GB, repo: Path, tmp_path: Path,
                                                                sub: str) -> None:
-    """What gitwary accepts after a `git worktree <sub>` it ran, held to the
+    """What gitblocker accepts after a `git worktree <sub>` it ran, held to the
     git under test: the fingerprint moves by `worktrees/<id>/commondir` and
     `gitdir` only, in the shape WORKTREE_WRITES gives the subcommand, and
     with the bytes worktree_pointers asks for."""
     import shutil
     wt, w2 = tmp_path / "wt", tmp_path / "w2"
-    assert gw.git("worktree", "add", "-q", str(wt), cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    gb.trust(repo)
     argv = {"add": ["add", "-q", str(w2)], "move": ["move", str(wt), str(w2)],
             "remove": ["remove", str(wt)], "prune": ["prune"]}[sub]
     if sub == "prune":
         shutil.rmtree(wt)
-    assert gw.git("worktree", *argv, cwd=repo).rc == 0
-    moved = sorted(l.split() for l in gw.check(repo).err.splitlines()
+    assert gb.git("worktree", *argv, cwd=repo).rc == 0
+    moved = sorted(l.split() for l in gb.check(repo).err.splitlines()
                    if re.match(r"\s+(added|removed|modified)\s", l))
     gone = [["removed", "worktrees/wt/commondir"], ["removed", "worktrees/wt/gitdir"]]
     assert moved == {"add": [["added", "worktrees/w2/commondir"], ["added", "worktrees/w2/gitdir"]],
@@ -1000,37 +1000,37 @@ def test_worktree_command_writes_its_pointers_and_nothing_else(gw: GW, repo: Pat
         assert not (repo / ".git/worktrees/wt").exists()
 
 
-def test_worktree_add_options_that_take_a_value_are_git_s(gw: GW, repo: Path, tmp_path: Path) -> None:
+def test_worktree_add_options_that_take_a_value_are_git_s(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[169] check_worktree_paths finds the path of `git worktree add` as
     git's option parser does: the first argument that is neither an option
     nor the value of one. WORKTREE_ADD_VALUES, the options whose value is
     the next argument, is the set git's own usage gives a `<value>`; an
     unambiguous prefix of a long one is that option."""
-    usage = gw.git("worktree", "add", "-h", cwd=repo).text
+    usage = gb.git("worktree", "add", "-h", cwd=repo).text
     takes = set()
     for line in usage.splitlines():
         m = re.match(r"^    (-[^ ,]+(?:, -[^ ,]+)*)( <[^>]+>)?(?:\s{2,}.*)?$", line)
         if m and m.group(2):
             takes |= {n.replace("[no-]", "") for n in m.group(1).split(", ")}
     assert takes, usage
-    assert takes == set(gw_mod.WORKTREE_ADD_VALUES), (sorted(takes), usage)
+    assert takes == set(gb_mod.WORKTREE_ADD_VALUES), (sorted(takes), usage)
     out = tmp_path / "out"
     for i, argv in enumerate((["-b", "b1"], ["-B", "b2"], ["--lock", "--reason", "why"], ["--lock", "--reas", "why"])):
         dest = out / f"w{i}"
-        r = gw.git("worktree", "add", "-q", *argv, str(dest), cwd=repo)
+        r = gb.git("worktree", "add", "-q", *argv, str(dest), cwd=repo)
         assert r.rc == 0 and (dest / ".git").is_file(), (argv, r.text)
-        assert gw_mod.worktree_path_args(["worktree", "add", "-q", *argv, str(dest)]) == [str(dest)], argv
-    assert gw_mod.worktree_path_args(["worktree", "add", "-q", "-bx", "--reason=why", "p", "main"]) == ["p"]
-    assert gw_mod.worktree_path_args(["worktree", "add", "--", "-p", "main"]) == ["-p"]
-    assert gw_mod.worktree_path_args(["worktree", "move", "a", "b"]) == ["a", "b"]
-    assert gw_mod.worktree_path_args(["worktree", "remove", "--force", "a"]) == ["a"]
-    assert gw_mod.worktree_path_args(["worktree", "repair", "a", "b"]) == ["a", "b"]
-    assert gw_mod.worktree_path_args(["worktree", "list"]) == []
+        assert gb_mod.worktree_path_args(["worktree", "add", "-q", *argv, str(dest)]) == [str(dest)], argv
+    assert gb_mod.worktree_path_args(["worktree", "add", "-q", "-bx", "--reason=why", "p", "main"]) == ["p"]
+    assert gb_mod.worktree_path_args(["worktree", "add", "--", "-p", "main"]) == ["-p"]
+    assert gb_mod.worktree_path_args(["worktree", "move", "a", "b"]) == ["a", "b"]
+    assert gb_mod.worktree_path_args(["worktree", "remove", "--force", "a"]) == ["a"]
+    assert gb_mod.worktree_path_args(["worktree", "repair", "a", "b"]) == ["a", "b"]
+    assert gb_mod.worktree_path_args(["worktree", "list"]) == []
 
 
-def test_worktree_subcommand_is_spelt_in_full(gw: GW, repo: Path, tmp_path: Path) -> None:
+def test_worktree_subcommand_is_spelt_in_full(gb: GB, repo: Path, tmp_path: Path) -> None:
     """WORKTREE_WRITES is matched on the whole word: git takes no prefix of
     a `worktree` subcommand, and none comes after an option."""
     for argv in (["worktree", "ad", str(tmp_path / "a")], ["worktree", "-q", "add", str(tmp_path / "b")]):
-        assert gw.git(*argv, cwd=repo).rc != 0, argv
+        assert gb.git(*argv, cwd=repo).rc != 0, argv
     assert not (repo / ".git/worktrees").exists()

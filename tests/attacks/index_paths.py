@@ -13,55 +13,55 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.attacks._helpers import INDEX_ESCAPES, add_submodule, forge_index
-from tests.conftest import GW
+from tests.conftest import GB
 
 HOOK = b"#!/bin/sh\ntouch /tmp/evil\n"
 
 
-def _forge(gw: GW, repo: Path, variant: str) -> None:
-    forge_index(gw, repo, [(0o100755, HOOK, INDEX_ESCAPES[variant][0])])
+def _forge(gb: GB, repo: Path, variant: str) -> None:
+    forge_index(gb, repo, [(0o100755, HOOK, INDEX_ESCAPES[variant][0])])
 
 
-def attack_index_name_into_gitdir(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_name_into_gitdir(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] index entry `.git/hooks/post-checkout`: written then run by checkout -- ."""
-    _forge(gw, repo, "into_gitdir")
+    _forge(gb, repo, "into_gitdir")
 
 
-def attack_index_name_dotgit_case(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_name_dotgit_case(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] index entry `.GIT/hooks/…`: the same directory on a case-insensitive filesystem"""
-    _forge(gw, repo, "dotgit_case")
+    _forge(gb, repo, "dotgit_case")
 
 
-def attack_index_name_dot_component(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_name_dot_component(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] index entry `./.git/hooks/…`"""
-    _forge(gw, repo, "dot_component")
+    _forge(gb, repo, "dot_component")
 
 
-def attack_index_name_dotdot_inside(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_name_dotdot_inside(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] index entry `x/../.git/hooks/…`"""
-    _forge(gw, repo, "dotdot_inside")
+    _forge(gb, repo, "dotdot_inside")
 
 
-def attack_index_name_empty_component(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_name_empty_component(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] index entry `x//../.git/hooks/…`"""
-    _forge(gw, repo, "empty_component")
+    _forge(gb, repo, "empty_component")
 
 
-def attack_index_name_dotdot_out(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_name_dotdot_out(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] index entry `../escaped`: written outside the repository"""
-    _forge(gw, repo, "dotdot_out")
+    _forge(gb, repo, "dotdot_out")
 
 
-def attack_index_name_absolute(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_name_absolute(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] absolute index entry name: written at that path, anywhere"""
-    forge_index(gw, repo, [(0o100644, b"x\n", str(tmp_path.resolve() / "abs-escaped").encode())])
+    forge_index(gb, repo, [(0o100644, b"x\n", str(tmp_path.resolve() / "abs-escaped").encode())])
 
 
-def attack_index_submodule_escape(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_index_submodule_escape(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[55] submodule index (.git/modules/sub/index) with `../.git/hooks/…`:
     an unwrapped `submodule foreach git checkout -- .` writes the
     superproject's hook"""
-    sub = add_submodule(gw, repo, tmp_path)
-    gw.trust(repo)
-    forge_index(gw, sub, [(0o100755, HOOK, b"../.git/hooks/post-checkout")],
+    sub = add_submodule(gb, repo, tmp_path)
+    gb.trust(repo)
+    forge_index(gb, sub, [(0o100755, HOOK, b"../.git/hooks/post-checkout")],
                 gitdir=repo / ".git/modules/sub")

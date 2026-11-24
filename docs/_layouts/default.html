@@ -14,7 +14,7 @@
 <body>
 <div class="wrap">
 <header class="top">
-  <a class="brand" href="{{ '/' | relative_url }}"><img src="{{ '/assets/logo.png' | relative_url }}" alt="" width="40" height="40">gitwary</a>
+  <a class="brand" href="{{ '/' | relative_url }}"><img src="{{ '/assets/logo.png' | relative_url }}" alt="" width="40" height="40">gitblocker</a>
   <nav aria-label="Page">
 {%- for n in site.data.nav %}
     <a href="{{ n.href }}">{{ n.label }}</a>
@@ -27,7 +27,7 @@
 </main>
 <footer>
   <img src="{{ '/assets/logo.png' | relative_url }}" alt="" width="28" height="28">
-  <span>gitwary, MIT licence.</span>
+  <span>gitblocker, MIT licence.</span>
   <a href="{{ site.github_url }}">{{ site.github_url | remove: 'https://' }}</a>
   <span>Python 3.9+, Linux and macOS, no dependencies.</span>
 </footer>

@@ -1,5 +1,5 @@
 #!/bin/sh
-# dpkg never drops a diversion by itself, `--package gitwary` or not: it
+# dpkg never drops a diversion by itself, `--package gitblocker` or not: it
 # is removed here. By now dpkg has deleted this package's /usr/bin/git and
 # /usr/lib/git-core/git, and --rename puts the real ones back under their
 # names. Not on an upgrade of this package (`upgrade`, `failed-upgrade`…),
@@ -7,6 +7,6 @@
 set -e
 if [ "$1" = remove ] || [ "$1" = abort-install ] || [ "$1" = disappear ]; then
     for f in /usr/bin/git /usr/lib/git-core/git; do
-        dpkg-divert --package gitwary --remove --rename --divert "$f.real" "$f"
+        dpkg-divert --package gitblocker --remove --rename --divert "$f.real" "$f"
     done
 fi

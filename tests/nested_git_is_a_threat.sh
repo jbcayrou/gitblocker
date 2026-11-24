@@ -12,8 +12,8 @@
 # skipped. Lesson: never put an assertion behind &&.
 #
 # Also checks that the FIRST `git add -A` (the one creating the gitlink)
-# executes nothing by itself: this is what makes GITWARY_SCAN_TREE=0
-# acceptable (gitwary reads the index gitlinks before every command, and so
+# executes nothing by itself: this is what makes GITBLOCKER_SCAN_TREE=0
+# acceptable (gitblocker reads the index gitlinks before every command, and so
 # refuses the command that follows the add). If a git version changes this,
 # this script fails and the option must be removed.
 set -u
@@ -38,7 +38,7 @@ echo "The user runs an ordinary 'git add -A':"
 r=$(ran git add -A); echo "  add -A itself: $r"
 if [ "$r" = EXECUTED ]; then
   echo "  WARNING: git executes the nested config on the first add -A already." \
-       "GITWARY_SCAN_TREE=0 (which only refuses the next command) is no longer safe."
+       "GITBLOCKER_SCAN_TREE=0 (which only refuses the next command) is no longer safe."
   exit 1
 fi
 gitlink=$(git ls-files --stage | awk '$1=="160000"{print $4}')
@@ -51,5 +51,5 @@ for c in "status --short" "diff" "add -A" "commit -qm x"; do
   r=$(ran git $c); echo "  git $c: $r"
   [ "$r" = EXECUTED ] && fail=1
 done
-[ $fail -eq 1 ] && echo "PROOF OK: the nested repository executes code from the root → gitwary must refuse" \
+[ $fail -eq 1 ] && echo "PROOF OK: the nested repository executes code from the root → gitblocker must refuse" \
                || { echo "PROOF INVALIDATED: git no longer executes the nested repository's config"; exit 1; }

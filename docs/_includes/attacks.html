@@ -13,30 +13,30 @@
 {% include term.html sb=true title="agent@sandbox — /workspace/api" body=body %}
   <div class="panes">
     <div>
-      <p class="cap">Back on the host, without gitwary</p>
+      <p class="cap">Back on the host, without gitblocker</p>
 {%- capture body %}{% include lines.html lines=a.without %}{% endcapture %}
 {% include term.html title="you@host — ~/work/api" body=body %}
     </div>
     <div>
-      <p class="cap">Back on the host, with gitwary in front of <code>git</code></p>
+      <p class="cap">Back on the host, with gitblocker in front of <code>git</code></p>
 {%- capture body -%}
 {%- if a.with -%}
 {% include lines.html lines=a.with %}
 {%- else -%}
 <span class="p">{{ a.command | escape }}</span>
 <span class="hr">{{ rule }}</span>
-<span class="w">! gitwary: ~/work/api/.git has changed since the last trust</span>
+<span class="w">! gitblocker: ~/work/api/.git has changed since the last trust</span>
 {% include lines.html lines=a.refuse.changes %}
 {%- if a.refuse.diff %}
 {% include lines.html lines=a.refuse.diff %}
 {%- endif %}
 <span></span>
 <span class="hr">{{ rule }}</span>
-<span class="hint">  If legitimate:  gitwary trust   Otherwise:  gitwary restore</span>
-<span class="x">✗ gitwary: refusing to run git.</span>
+<span class="hint">  If legitimate:  gitblocker trust   Otherwise:  gitblocker restore</span>
+<span class="x">✗ gitblocker: refusing to run git.</span>
 {%- endif -%}
 {%- endcapture %}
-{% include term.html title="you@host — ~/work/api — git is gitwary git" body=body %}
+{% include term.html title="you@host — ~/work/api — git is gitblocker git" body=body %}
     </div>
   </div>
   <p class="note">The demo payloads announce themselves so you can read them. A real one stays silent.</p>

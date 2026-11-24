@@ -1,4 +1,4 @@
-"""Config files git reads but gitwary might not parse: global config, main
+"""Config files git reads but gitblocker might not parse: global config, main
 repository config seen from a worktree, deep include chains. [16], [17], [18]
 """
 from __future__ import annotations
@@ -6,78 +6,78 @@ from __future__ import annotations
 import getpass
 from pathlib import Path
 
-from tests.conftest import GW, write_exec
+from tests.conftest import GB, write_exec
 
 
-def attack_global_hookspath(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[16] core.hooksPath in ~/.gitconfig pointing into the volume"""
     shared = tmp_path / "vol-hooks"
     write_exec(shared / "pre-commit", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "--global", "core.hooksPath", str(shared))
-    gw.trust(repo)
+    gb.git("config", "--global", "core.hooksPath", str(shared))
+    gb.trust(repo)
     write_exec(shared / "pre-commit")
 
 
-def attack_global_include_path(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_include_path(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[16] include.path in ~/.gitconfig to a file in the volume"""
     inc = tmp_path / "shared.gitconfig"
     inc.write_text("[core]\n")
-    gw.git("config", "--global", "include.path", str(inc))
-    gw.trust(repo)
+    gb.git("config", "--global", "include.path", str(inc))
+    gb.trust(repo)
     inc.write_text("[core]\n\tfsmonitor = /tmp/evil\n")
 
 
-def attack_include_chain_depth7(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_include_chain_depth7(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[17] include chain of depth 7 (git follows 10)"""
     for i in range(1, 7):
         (repo / f"l{i}").write_text(f"[include]\n\tpath = l{i + 1}\n")
     (repo / "l7").write_text("[core]\n")
-    gw.git("config", "include.path", "../l1", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "include.path", "../l1", cwd=repo)
+    gb.trust(repo)
     (repo / "l7").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
 
 
-def attack_inline_section_hookspath(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_inline_section_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[21] `[core]hooksPath = .githooks` on a single line: git reads the key,
     parse_git_config dropped it with the header → .githooks never watched"""
     write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
     cfg = repo / ".git/config"
     cfg.write_text(cfg.read_text() + "[core]hooksPath = .githooks\n")
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_inline_section_include_path(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_inline_section_include_path(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[21] `[include]path = ../inc.cfg` on one line: include never followed
     (path relative to the config file's directory, i.e. `.git/`)"""
     (repo / "inc.cfg").write_text("[core]\n")
     cfg = repo / ".git/config"
     cfg.write_text(cfg.read_text() + "[include]path = ../inc.cfg\n")
-    gw.trust(repo)
+    gb.trust(repo)
     (repo / "inc.cfg").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
 
 
-def attack_inline_section_alias(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_inline_section_alias(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[21] `[alias]t = !./tool.sh` on one line: tree script not watched"""
     write_exec(repo / "tool.sh", "#!/bin/sh\nexit 0\n")
     cfg = repo / ".git/config"
     cfg.write_text(cfg.read_text() + "[alias]t = !./tool.sh\n")
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(repo / "tool.sh", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_include_into_volatile_gitdir(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_include_into_volatile_gitdir(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[22] include.path=logs/x.conf: included config under logs/ (volatile),
     not fingerprinted → execution key added after trust without alert"""
     inc = repo / ".git/logs/x.conf"
     inc.parent.mkdir(parents=True, exist_ok=True)
     inc.write_text("[core]\n")
-    gw.git("config", "include.path", "logs/x.conf", cwd=repo)
-    gw.run("trust", cwd=repo)           # refusal at trust time is accepted (volatile zone)
+    gb.git("config", "include.path", "logs/x.conf", cwd=repo)
+    gb.run("trust", cwd=repo)           # refusal at trust time is accepted (volatile zone)
     inc.write_text("[core]\n\tfsmonitor = /tmp/evil\n")
 
 
-def attack_include_chain_depth10_script(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_include_chain_depth10_script(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[17] include.path depth 10: git reads the 10th file (MAX_INCLUDE_DEPTH)
     but config_refs only parsed 9 levels (the first loop round consumed the
     base files) → the script referenced at the 10th level escaped watching"""
@@ -85,145 +85,145 @@ def attack_include_chain_depth10_script(gw: GW, repo: Path, tmp_path: Path) -> N
     for i in range(1, 10):
         (repo / f"l{i}").write_text(f"[include]\n\tpath = l{i + 1}\n")
     (repo / "l10").write_text("[core]\n\tfsmonitor = ./scanner.sh\n")
-    gw.git("config", "include.path", "../l1", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "include.path", "../l1", cwd=repo)
+    gb.trust(repo)
     write_exec(repo / "scanner.sh", "#!/bin/sh\necho PWNED\nexit 1\n")
 
 
-def _alias_script(gw: GW, repo: Path, alias: str) -> None:
+def _alias_script(gb: GB, repo: Path, alias: str) -> None:
     write_exec(repo / "tool.sh", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "alias.t", alias, cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.t", alias, cwd=repo)
+    gb.trust(repo)
     write_exec(repo / "tool.sh", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_alias_script_via_pwd(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_via_pwd(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[37] `!$PWD/tool.sh`: a `!` alias runs from the top of the tree, the
     shell expands $PWD there; the token was not recognised as a path"""
-    _alias_script(gw, repo, "!$PWD/tool.sh")
+    _alias_script(gb, repo, "!$PWD/tool.sh")
 
 
-def attack_alias_script_via_pwd_braces(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_via_pwd_braces(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[37] `!sh -c 'exec ${PWD}/tool.sh'`"""
-    _alias_script(gw, repo, "!sh -c 'exec ${PWD}/tool.sh'")
+    _alias_script(gb, repo, "!sh -c 'exec ${PWD}/tool.sh'")
 
 
-def attack_alias_script_via_toplevel(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_via_toplevel(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[37] `!$(git rev-parse --show-toplevel)/tool.sh` (common alias idiom)"""
-    _alias_script(gw, repo, "!$(git rev-parse --show-toplevel)/tool.sh")
+    _alias_script(gb, repo, "!$(git rev-parse --show-toplevel)/tool.sh")
 
 
-def attack_alias_script_via_assignment(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_via_assignment(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[37] `!T=./tool.sh sh -c '$T'`: path on the right of `=`"""
-    _alias_script(gw, repo, "!T=./tool.sh sh -c '$T'")
+    _alias_script(gb, repo, "!T=./tool.sh sh -c '$T'")
 
 
-def attack_alias_script_via_home(gw: GW, repo: Path, tmp_path: Path) -> None:
-    """[37] `!$HOME/bin/tool.sh`: $HOME is the same for gitwary and the shell"""
-    tool = Path(gw.env["HOME"]) / "bin/tool.sh"
+def attack_alias_script_via_home(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[37] `!$HOME/bin/tool.sh`: $HOME is the same for gitblocker and the shell"""
+    tool = Path(gb.env["HOME"]) / "bin/tool.sh"
     write_exec(tool, "#!/bin/sh\nexit 0\n")
-    gw.git("config", "alias.t", "!$HOME/bin/tool.sh", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.t", "!$HOME/bin/tool.sh", cwd=repo)
+    gb.trust(repo)
     write_exec(tool, "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_readonly_ext_script(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_readonly_ext_script(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[38] script outside the tree, mode 0555, in a writable directory:
     `os.access(file, W_OK)` was false so it was ignored, but the container
     can unlink it and recreate it"""
     tool = tmp_path / "vol-tools" / "tool.sh"
     write_exec(tool, "#!/bin/sh\nexit 0\n")
     tool.chmod(0o555)
-    gw.git("config", "alias.t", f"!{tool}", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.t", f"!{tool}", cwd=repo)
+    gb.trust(repo)
     tool.unlink()
     write_exec(tool, "#!/bin/sh\ntouch /tmp/evil\n")
     tool.chmod(0o555)
 
 
-def attack_submodule_config_hookspath(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_submodule_config_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[39] core.hooksPath in .git/modules/sub/config pointing into the
     submodule's tree: that config was hashed but never parsed, so the hooks
     it names were not watched (`submodule foreach 'git commit'` runs them)"""
     from tests.attacks._helpers import add_submodule
-    sub = add_submodule(gw, repo, tmp_path)
+    sub = add_submodule(gb, repo, tmp_path)
     write_exec(sub / ".hk/post-commit", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "core.hooksPath", ".hk", cwd=sub)
-    gw.trust(repo)
+    gb.git("config", "core.hooksPath", ".hk", cwd=sub)
+    gb.trust(repo)
     write_exec(sub / ".hk/post-commit", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_submodule_config_alias_script(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_submodule_config_alias_script(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[39] `!./tool.sh` alias in a submodule's config: relative to the
     submodule's tree, not the superproject's"""
     from tests.attacks._helpers import add_submodule
-    sub = add_submodule(gw, repo, tmp_path)
+    sub = add_submodule(gb, repo, tmp_path)
     write_exec(sub / "tool.sh", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "alias.t", "!./tool.sh", cwd=sub)
-    gw.trust(repo)
+    gb.git("config", "alias.t", "!./tool.sh", cwd=sub)
+    gb.trust(repo)
     write_exec(sub / "tool.sh", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_local_remote_hook(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_local_remote_hook(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[45] remote.origin.url = a local repository in the volume:
     `git push` runs that repository's pre-receive/update/post-receive hooks
     (and honours its config), none of which is in the fingerprint"""
     sib = tmp_path / "vol-remote.git"
-    gw.git("init", "-q", "--bare", str(sib))
-    gw.git("remote", "add", "origin", str(sib), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(sib))
+    gb.git("remote", "add", "origin", str(sib), cwd=repo)
+    gb.trust(repo)
     write_exec(sib / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
 # [46] parser divergences: the user's config carries a core.hooksPath written
 # in a form the old parser misread; git honours it, the sandbox rewrites the hook.
-def _hooks_in_tree_then_rewritten(gw: GW, repo: Path, config_tail: bytes, hooks: str = ".githooks") -> None:
+def _hooks_in_tree_then_rewritten(gb: GB, repo: Path, config_tail: bytes, hooks: str = ".githooks") -> None:
     write_exec(repo / hooks / "pre-commit", "#!/bin/sh\nexit 0\n")
     cfg = repo / ".git/config"
     cfg.write_bytes(cfg.read_bytes() + config_tail)
-    assert gw.git("config", "--get", "core.hookspath", cwd=repo).rc == 0, "git must honour it"
-    gw.trust(repo)
+    assert gb.git("config", "--get", "core.hookspath", cwd=repo).rc == 0, "git must honour it"
+    gb.trust(repo)
     write_exec(repo / hooks / "pre-commit")
 
 
-def attack_hookspath_after_comment_backslash(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_after_comment_backslash(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[46] core.hooksPath on the line after a comment ending with `\\`"""
-    _hooks_in_tree_then_rewritten(gw, repo, b"[core]\n# husky \\\n\thooksPath = .githooks\n")
+    _hooks_in_tree_then_rewritten(gb, repo, b"[core]\n# husky \\\n\thooksPath = .githooks\n")
 
 
-def attack_hookspath_after_inline_comment_backslash(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_after_inline_comment_backslash(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[46] core.hooksPath after a value whose trailing comment ends with `\\`"""
-    _hooks_in_tree_then_rewritten(gw, repo, b"[core]\n\tpager = less # x \\\n\thooksPath = .githooks\n")
+    _hooks_in_tree_then_rewritten(gb, repo, b"[core]\n\tpager = less # x \\\n\thooksPath = .githooks\n")
 
 
-def attack_hookspath_backslash_at_eof(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_backslash_at_eof(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[46] core.hooksPath = .githooks\\ at EOF without a newline"""
-    _hooks_in_tree_then_rewritten(gw, repo, b"[core]\n\thooksPath = .githooks\\")
+    _hooks_in_tree_then_rewritten(gb, repo, b"[core]\n\thooksPath = .githooks\\")
 
 
-def attack_hookspath_under_bom(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_under_bom(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[46] config starting with a UTF-8 BOM"""
     write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
     cfg = repo / ".git/config"
     cfg.write_bytes(b"\xef\xbb\xbf[core]\n\thooksPath = .githooks\n" + cfg.read_bytes())
-    assert gw.git("config", "--get", "core.hookspath", cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "--get", "core.hookspath", cwd=repo).rc == 0
+    gb.trust(repo)
     write_exec(repo / ".githooks/pre-commit")
 
 
-def attack_hookspath_internal_whitespace(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_internal_whitespace(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[46] hooks directory named `my  hooks` (two spaces): the old parser
     collapsed the value and watched another directory"""
-    _hooks_in_tree_then_rewritten(gw, repo, b"[core]\n\thooksPath = my  hooks\n", "my  hooks")
+    _hooks_in_tree_then_rewritten(gb, repo, b"[core]\n\thooksPath = my  hooks\n", "my  hooks")
 
 
-def attack_hookspath_nbsp(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_nbsp(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[46] hooks directory whose name ends with a no-break space: str.strip()
     removed it, git keeps it"""
-    _hooks_in_tree_then_rewritten(gw, repo, "[core]\n\thooksPath = hooks\u00a0\n".encode(), "hooks\u00a0")
+    _hooks_in_tree_then_rewritten(gb, repo, "[core]\n\thooksPath = hooks\u00a0\n".encode(), "hooks\u00a0")
 
 
-def attack_hookspath_tilde_user(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_tilde_user(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[50] core.hooksPath = ~<user>/… (git expands it, only ~/ was)"""
     import os
     home = Path(os.path.expanduser(f"~{getpass.getuser()}"))
@@ -231,284 +231,284 @@ def attack_hookspath_tilde_user(gw: GW, repo: Path, tmp_path: Path) -> None:
     # test directory is not under it): the path git builds is the same
     d = os.path.relpath(tmp_path / "vol-hooks", home)
     write_exec(tmp_path / "vol-hooks/pre-commit", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "core.hooksPath", f"~{getpass.getuser()}/{d}", cwd=repo)
-    r = gw.git("rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=repo)
+    gb.git("config", "core.hooksPath", f"~{getpass.getuser()}/{d}", cwd=repo)
+    r = gb.git("rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=repo)
     assert Path(r.out.strip()).resolve() == (tmp_path / "vol-hooks").resolve(), r.text
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(tmp_path / "vol-hooks/pre-commit")
 
 
-def attack_core_worktree_hooks(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_core_worktree_hooks(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[47] core.worktree = another directory: a relative core.hooksPath
     lives there, not next to .git"""
     other = tmp_path / "other"
     write_exec(other / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "core.worktree", str(other), cwd=repo)
-    gw.git("config", "core.hooksPath", ".githooks", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "core.worktree", str(other), cwd=repo)
+    gb.git("config", "core.hooksPath", ".githooks", cwd=repo)
+    gb.trust(repo)
     write_exec(other / ".githooks/pre-commit")
 
 
-def attack_env_config_hookspath(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_env_config_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[48] core.hooksPath set through GIT_CONFIG_COUNT in the user's
     environment, pointing into the tree"""
-    gw.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath",
+    gb.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath",
                   GIT_CONFIG_VALUE_0=".githooks")
     write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(repo / ".githooks/pre-commit")
 
 
-def attack_env_config_include(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_env_config_include(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[48] GIT_CONFIG_PARAMETERS with an absolute include.path into the volume"""
     inc = tmp_path / "vol.gitconfig"
     inc.write_text("[core]\n")
-    gw.env["GIT_CONFIG_PARAMETERS"] = f"'include.path'='{inc}'"
-    gw.trust(repo)
+    gb.env["GIT_CONFIG_PARAMETERS"] = f"'include.path'='{inc}'"
+    gb.trust(repo)
     inc.write_text("[core]\n\tfsmonitor = /tmp/evil\n")
 
 
 # [58] sh expansions that os.path.expandvars does not perform: the value
-# names no existing file for gitwary, sh resolves it to a tree script.
-def _fsmonitor_script(gw: GW, repo: Path, value: str) -> None:
+# names no existing file for gitblocker, sh resolves it to a tree script.
+def _fsmonitor_script(gb: GB, repo: Path, value: str) -> None:
     write_exec(repo / "p.sh", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "core.fsmonitor", value, cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "core.fsmonitor", value, cwd=repo)
+    gb.trust(repo)
     write_exec(repo / "p.sh", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_fsmonitor_script_via_pwd(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_fsmonitor_script_via_pwd(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[37] control for [58]: `core.fsmonitor = $PWD/p.sh` (`git status` runs it)"""
-    _fsmonitor_script(gw, repo, "$PWD/p.sh")
+    _fsmonitor_script(gb, repo, "$PWD/p.sh")
 
 
-def attack_fsmonitor_script_via_default_expansion(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_fsmonitor_script_via_default_expansion(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[58] `core.fsmonitor = ${TOOL:-./p.sh}`: sh substitutes the default,
     expandvars leaves the text as is"""
-    _fsmonitor_script(gw, repo, "${TOOL:-./p.sh}")
+    _fsmonitor_script(gb, repo, "${TOOL:-./p.sh}")
 
 
-def attack_fsmonitor_script_via_subshell_pwd(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_fsmonitor_script_via_subshell_pwd(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[58] `core.fsmonitor = $(pwd)/p.sh`: no variable involved, resolves on
     any machine"""
-    _fsmonitor_script(gw, repo, "$(pwd)/p.sh")
+    _fsmonitor_script(gb, repo, "$(pwd)/p.sh")
 
 
-def attack_fsmonitor_script_via_backtick_pwd(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_fsmonitor_script_via_backtick_pwd(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[58] core.fsmonitor = `pwd`/p.sh"""
-    _fsmonitor_script(gw, repo, "`pwd`/p.sh")
+    _fsmonitor_script(gb, repo, "`pwd`/p.sh")
 
 
-def attack_alias_script_via_default_expansion(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_via_default_expansion(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[58] `!${X:-./tool.sh}`"""
-    _alias_script(gw, repo, "!${X:-./tool.sh}")
+    _alias_script(gb, repo, "!${X:-./tool.sh}")
 
 
-def attack_alias_script_with_alternate_suffix(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_with_alternate_suffix(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[58] `!./tool.sh${OPT:+ x}`: the path is glued to the expansion"""
-    _alias_script(gw, repo, "!./tool.sh${OPT:+ x}")
+    _alias_script(gb, repo, "!./tool.sh${OPT:+ x}")
 
 
-def attack_env_config_fsmonitor_default_expansion(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_env_config_fsmonitor_default_expansion(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[58] GIT_CONFIG_PARAMETERS `core.fsmonitor=${X:-./p.sh}` in the user's
     environment: nothing in .git names the script"""
     write_exec(repo / "p.sh", "#!/bin/sh\nexit 0\n")
-    gw.env["GIT_CONFIG_PARAMETERS"] = "'core.fsmonitor=${X:-./p.sh}'"
-    gw.trust(repo)
+    gb.env["GIT_CONFIG_PARAMETERS"] = "'core.fsmonitor=${X:-./p.sh}'"
+    gb.trust(repo)
     write_exec(repo / "p.sh", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
 # [59] core.hooksPath resolving to the root of the tree: add() drops a path
 # equal to the root, and no walk of the tree covers its top level.
-def _hooks_at_root(gw: GW, repo: Path, value: str) -> None:
+def _hooks_at_root(gb: GB, repo: Path, value: str) -> None:
     write_exec(repo / "pre-commit", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "core.hooksPath", value, cwd=repo)
-    gw.run("trust", cwd=repo)           # refused at trust time: the expected outcome
+    gb.git("config", "core.hooksPath", value, cwd=repo)
+    gb.run("trust", cwd=repo)           # refused at trust time: the expected outcome
     write_exec(repo / "pre-commit", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_hookspath_root_absolute(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_root_absolute(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[59] `git config core.hooksPath "$(git rev-parse --show-toplevel)"`"""
-    _hooks_at_root(gw, repo, str(repo))
+    _hooks_at_root(gb, repo, str(repo))
 
 
-def attack_hookspath_root_via_gitdir_parent(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_root_via_gitdir_parent(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[59] core.hooksPath = .git/.."""
-    _hooks_at_root(gw, repo, ".git/..")
+    _hooks_at_root(gb, repo, ".git/..")
 
 
-def attack_hookspath_root_dot_slash_dot(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_root_dot_slash_dot(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[59] core.hooksPath = ./. (`.` and `./` alone make git search the
     PATH for `pre-commit`: nothing of the tree runs)"""
-    _hooks_at_root(gw, repo, "./.")
+    _hooks_at_root(gb, repo, "./.")
 
 
 # [61] a local remote [45] redirected the way git redirects any gitdir:
 # `commondir`, a gitfile, `config.worktree`. _local_remote watched only
 # `<remote>/.git/config` and `hooks/`, not the files git actually opens.
-def attack_local_remote_commondir(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_local_remote_commondir(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[61] `commondir` planted in the local remote's gitdir: receive-pack
     takes config and hooks/ from the directory it names"""
     sib = tmp_path / "vol-remote.git"
-    gw.git("init", "-q", "--bare", str(sib))
-    gw.git("remote", "add", "origin", str(sib), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(sib))
+    gb.git("remote", "add", "origin", str(sib), cwd=repo)
+    gb.trust(repo)
     evil = tmp_path / "vol-evil.git"
-    gw.git("init", "-q", "--bare", str(evil))
+    gb.git("init", "-q", "--bare", str(evil))
     write_exec(evil / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
     (sib / "commondir").write_text(f"{evil}\n")
 
 
-def attack_local_remote_gitfile(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_local_remote_gitfile(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[61] local remote whose `.git` is a gitfile (`init --separate-git-dir`),
     trusted as such: _local_remote did not recognise it, nothing was watched"""
     other, gd = tmp_path / "vol-other", tmp_path / "vol-other-gitdir"
-    gw.git("init", "-q", "--separate-git-dir", str(gd), str(other))
-    gw.git("remote", "add", "origin", str(other), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--separate-git-dir", str(gd), str(other))
+    gb.git("remote", "add", "origin", str(other), cwd=repo)
+    gb.trust(repo)
     write_exec(gd / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_local_remote_worktree_config(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_local_remote_worktree_config(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[61] local remote with extensions.worktreeConfig: its config.worktree
     (read by receive-pack) was not watched"""
     sib = tmp_path / "vol-remote.git"
-    gw.git("init", "-q", "--bare", str(sib))
-    gw.git("config", "extensions.worktreeConfig", "true", cwd=sib)
-    gw.git("remote", "add", "origin", str(sib), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(sib))
+    gb.git("config", "extensions.worktreeConfig", "true", cwd=sib)
+    gb.git("remote", "add", "origin", str(sib), cwd=repo)
+    gb.trust(repo)
     write_exec(tmp_path / "vol-h/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
     (sib / "config.worktree").write_text(f"[core]\n\thooksPath = {tmp_path / 'vol-h'}\n")
 
 
-def attack_hookspath_sourced_lib_rewritten(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_sourced_lib_rewritten(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[65] control: a hooks directory inside the tree stays watched at any
     depth — `.githooks/pre-commit` sources `.githooks/lib/common.sh`, the
     sandbox rewrites the library (the first depth-1 fix let it run)"""
     write_exec(repo / ".githooks/pre-commit", '#!/bin/sh\n. "$(dirname "$0")/lib/common.sh"\n')
     (repo / ".githooks/lib").mkdir()
     (repo / ".githooks/lib/common.sh").write_text("true\n")
-    gw.git("config", "core.hooksPath", ".githooks", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "core.hooksPath", ".githooks", cwd=repo)
+    gb.trust(repo)
     (repo / ".githooks/lib/common.sh").write_text("touch /tmp/evil\n")
 
 
-def attack_hookspath_parent_hook_planted(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_parent_hook_planted(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[65] control: core.hooksPath = .. is watched at depth 1 — a hook
     planted next to the repository is seen (git runs `../pre-commit`)"""
-    gw.git("config", "core.hooksPath", "..", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "core.hooksPath", "..", cwd=repo)
+    gb.trust(repo)
     write_exec(tmp_path / "pre-commit", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_template_dir_hook_rewritten(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_template_dir_hook_rewritten(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[65] control: init.templateDir keeps its hooks/ watched once walks
     stop at depth 1 (a re-run `git init` copies them into .git/hooks)"""
     tpl = tmp_path / "vol-tpl"
     write_exec(tpl / "hooks/post-checkout", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "init.templateDir", str(tpl), cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "init.templateDir", str(tpl), cwd=repo)
+    gb.trust(repo)
     write_exec(tpl / "hooks/post-checkout", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
 # ---------------------------------------- adversarial review of 2026-10-22
-def attack_local_remote_relative_hookspath(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_local_remote_relative_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[67] non-bare local remote with a relative core.hooksPath
     (husky `.husky/_`): receive-pack runs hooks in the remote's $GIT_DIR,
-    git runs `<remote>/.git/.husky/_/pre-receive`; gitwary watched
+    git runs `<remote>/.git/.husky/_/pre-receive`; gitblocker watched
     `<remote>/.husky/_`"""
     hub = tmp_path / "vol-hub"
-    gw.git("init", "-q", str(hub))
+    gb.git("init", "-q", str(hub))
     (hub / ".husky/_").mkdir(parents=True)
-    gw.git("config", "core.hooksPath", ".husky/_", cwd=hub)
-    gw.git("remote", "add", "hub", str(hub), cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "core.hooksPath", ".husky/_", cwd=hub)
+    gb.git("remote", "add", "hub", str(hub), cwd=repo)
+    gb.trust(repo)
     write_exec(hub / ".git/.husky/_/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_global_relative_hookspath_in_bare_remote(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_relative_hookspath_in_bare_remote(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[68] a global relative core.hooksPath (`.githooks`) applies to a
     local bare remote too: receive-pack runs `hub.git/.githooks/pre-receive`;
-    gitwary resolved the global value against the repository's root only"""
+    gitblocker resolved the global value against the repository's root only"""
     hub = tmp_path / "vol-hub.git"
-    gw.git("init", "-q", "--bare", str(hub))
-    gw.git("config", "--global", "core.hooksPath", ".githooks")
-    gw.git("remote", "add", "hub", str(hub), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(hub))
+    gb.git("config", "--global", "core.hooksPath", ".githooks")
+    gb.git("remote", "add", "hub", str(hub), cwd=repo)
+    gb.trust(repo)
     write_exec(hub / ".githooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_global_relative_hookspath_in_submodule(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_relative_hookspath_in_submodule(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[68] the same global `.githooks` inside a submodule: `git
     submodule update` checks the submodule out and runs
     `sub/.githooks/post-checkout`"""
     from tests.attacks._helpers import add_submodule
-    gw.git("config", "--global", "core.hooksPath", ".githooks")
-    sub = add_submodule(gw, repo, tmp_path)
-    gw.trust(repo)
+    gb.git("config", "--global", "core.hooksPath", ".githooks")
+    sub = add_submodule(gb, repo, tmp_path)
+    gb.trust(repo)
     write_exec(sub / ".githooks/post-checkout", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_local_remote_percent_encoded_file_url(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_local_remote_percent_encoded_file_url(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[69] `file://…/My%20Repos/hub.git`: git URL-decodes it and runs
     the remote's hooks on push; _local_remote took the encoded text as a path
     and found no repository"""
     hub = tmp_path / "My Repos/hub.git"
-    gw.git("init", "-q", "--bare", str(hub))
-    gw.git("remote", "add", "hub", "file://" + str(hub).replace(" ", "%20"), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(hub))
+    gb.git("remote", "add", "hub", "file://" + str(hub).replace(" ", "%20"), cwd=repo)
+    gb.trust(repo)
     write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_alias_script_after_cd(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_after_cd(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[71] OPEN — `!cd tools && ./lint.sh`: the token resolves to
     `<root>/lint.sh`, `tools/lint.sh` (what sh runs) is never watched"""
     write_exec(repo / "tools/lint.sh", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "alias.lint", "!cd tools && ./lint.sh", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.lint", "!cd tools && ./lint.sh", cwd=repo)
+    gb.trust(repo)
     write_exec(repo / "tools/lint.sh", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_alias_script_in_subshell_after_cd(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_in_subshell_after_cd(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[71] OPEN — `!(cd tools; sh lint.sh)`"""
     write_exec(repo / "tools/lint.sh", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "alias.lint", "!(cd tools; sh lint.sh)", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.lint", "!(cd tools; sh lint.sh)", cwd=repo)
+    gb.trust(repo)
     write_exec(repo / "tools/lint.sh", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_push_default_names_a_path(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_push_default_names_a_path(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[73] remote.pushDefault = a path: git takes an unconfigured
     remote name as a URL and pushes there; only remote.*.url/pushurl were
     followed"""
     hub = tmp_path / "vol-hub.git"
-    gw.git("init", "-q", "--bare", str(hub))
-    gw.git("config", "remote.pushDefault", str(hub), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(hub))
+    gb.git("config", "remote.pushDefault", str(hub), cwd=repo)
+    gb.trust(repo)
     write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_push_remote_names_a_path(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_push_remote_names_a_path(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[73] branch.main.pushRemote = a path"""
     hub = tmp_path / "vol-hub.git"
-    gw.git("init", "-q", "--bare", str(hub))
-    gw.git("config", "branch.main.pushRemote", str(hub), cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(hub))
+    gb.git("config", "branch.main.pushRemote", str(hub), cwd=repo)
+    gb.trust(repo)
     write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_branch_remote_names_a_path(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_branch_remote_names_a_path(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[73] branch.main.remote = a path (with an upstream, `git push` goes
     there)"""
     hub = tmp_path / "vol-hub.git"
-    gw.git("init", "-q", "--bare", str(hub))
-    gw.git("config", "branch.main.remote", str(hub), cwd=repo)
-    gw.git("config", "branch.main.merge", "refs/heads/main", cwd=repo)
-    gw.trust(repo)
+    gb.git("init", "-q", "--bare", str(hub))
+    gb.git("config", "branch.main.remote", str(hub), cwd=repo)
+    gb.git("config", "branch.main.merge", "refs/heads/main", cwd=repo)
+    gb.trust(repo)
     write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def _program_link(gw: GW, tmp_path: Path, chain: bool = False) -> tuple[Path, Path]:
+def _program_link(gb: GB, tmp_path: Path, chain: bool = False) -> tuple[Path, Path]:
     """gpg.program named through a symlink outside the tree, as Homebrew
     does; with `chain`, through two links. Returns (link to repoint, target)."""
     real = tmp_path / "vol-bin/Cellar/gpg"
@@ -517,86 +517,86 @@ def _program_link(gw: GW, tmp_path: Path, chain: bool = False) -> tuple[Path, Pa
     hop.symlink_to(real)
     link = tmp_path / "vol-bin/gpg"
     link.symlink_to(hop if chain else real)
-    gw.git("config", "--global", "gpg.program", str(link))
+    gb.git("config", "--global", "gpg.program", str(link))
     return (hop if chain else link), real
 
 
-def attack_global_program_symlink_repointed(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_program_symlink_repointed(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[75] control: the program link outside the tree is watched as a link:
     repointed to a planted script, seen (the canonical path alone kept
     hashing the old target)"""
-    link, _ = _program_link(gw, tmp_path)
-    gw.trust(repo)
+    link, _ = _program_link(gb, tmp_path)
+    gb.trust(repo)
     write_exec(tmp_path / "vol-bin/evil", "#!/bin/sh\ntouch /tmp/evil\n")
     link.unlink()
     link.symlink_to(tmp_path / "vol-bin/evil")
 
 
-def attack_global_program_symlink_intermediate_repointed(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_program_symlink_intermediate_repointed(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[75] control: an unwatched link between the named link and the
     program, repointed: the named link's hash holds the content it reaches"""
-    hop, _ = _program_link(gw, tmp_path, chain=True)
-    gw.trust(repo)
+    hop, _ = _program_link(gb, tmp_path, chain=True)
+    gb.trust(repo)
     write_exec(tmp_path / "vol-bin/evil", "#!/bin/sh\ntouch /tmp/evil\n")
     hop.unlink()
     hop.symlink_to(tmp_path / "vol-bin/evil")
 
 
-def attack_global_program_symlink_target_rewritten(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_program_symlink_target_rewritten(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[75] control: the program behind the link rewritten"""
-    _, real = _program_link(gw, tmp_path)
-    gw.trust(repo)
+    _, real = _program_link(gb, tmp_path)
+    gb.trust(repo)
     write_exec(real, "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_alias_script_glued_to_empty_variable(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_script_glued_to_empty_variable(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[74] OPEN — `!sh ./tools$NOPE/lint.sh`: an unset variable inside a
     word expands to nothing in sh; the sh readings give `.` or keep the
     text, never the empty expansion"""
     (repo / "tools").mkdir()
     (repo / "tools/lint.sh").write_text("exit 0\n")
-    gw.git("config", "alias.lint", "!sh ./tools$NOPE/lint.sh", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.lint", "!sh ./tools$NOPE/lint.sh", cwd=repo)
+    gb.trust(repo)
     (repo / "tools/lint.sh").write_text("touch /tmp/evil\n")
 
 
-def attack_alias_config_hookspath(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_config_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[80] alias.ci = -c core.hooksPath=.githooks commit: the alias's `-c`
     makes `.githooks` the hooks directory of every `git ci`"""
     write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "alias.ci", "-c core.hooksPath=.githooks commit", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.ci", "-c core.hooksPath=.githooks commit", cwd=repo)
+    gb.trust(repo)
     write_exec(repo / ".githooks/pre-commit", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_global_alias_config_hookspath_quoted(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_alias_config_hookspath_quoted(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[80] the same from ~/.gitconfig, quoted and after `-p`"""
     write_exec(repo / ".githooks/pre-push", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "--global", "alias.pp", "-p -c 'core.hooksPath=.githooks' push", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "--global", "alias.pp", "-p -c 'core.hooksPath=.githooks' push", cwd=repo)
+    gb.trust(repo)
     write_exec(repo / ".githooks/pre-push", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_alias_config_hookspath_outside(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_config_hookspath_outside(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[80] an alias's `-c core.hooksPath` naming a directory of the volume"""
     shared = tmp_path / "vol-hooks"
     write_exec(shared / "pre-commit", "#!/bin/sh\nexit 0\n")
-    gw.git("config", "alias.ci", f"-c core.hooksPath={shared} commit", cwd=repo)
-    gw.trust(repo)
+    gb.git("config", "alias.ci", f"-c core.hooksPath={shared} commit", cwd=repo)
+    gb.trust(repo)
     write_exec(shared / "pre-commit", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_lfsconfig_added(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_lfsconfig_added(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[34] `.lfsconfig` planted in the tree: git-lfs reads
     lfs.customtransfer.<x>.path from it, a program it runs"""
     write_exec(repo / "t.sh", "#!/bin/sh\ntouch /tmp/evil\n")
     (repo / ".lfsconfig").write_text('[lfs "customtransfer.x"]\n\tpath = ./t.sh\n')
 
 
-def attack_lfsconfig_rewritten(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_lfsconfig_rewritten(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[34] a trusted `.lfsconfig` rewritten to name a transfer program"""
     (repo / ".lfsconfig").write_text("[lfs]\n\turl = https://lfs.example/x\n")
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(repo / "t.sh", "#!/bin/sh\ntouch /tmp/evil\n")
     (repo / ".lfsconfig").write_text('[lfs "customtransfer.x"]\n\tpath = ./t.sh\n')
 
@@ -609,292 +609,292 @@ def _evil(tmp_path: Path) -> str:
     return f"#!/bin/sh\ntouch '{tmp_path}/RAN'\n"
 
 
-def attack_alias_subsection_config_hookspath(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_subsection_config_hookspath(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[90] `[alias "ci"] command = -c core.hooksPath=.githooks commit`
     (git 2.54): the subsection form of the alias of [80], parsed as section
     `alias.ci`, key `command`, never read as an alias"""
     write_exec(repo / ".githooks/pre-commit", OK_HOOK)
-    assert gw.git("config", "alias.ci.command", "-c core.hooksPath=.githooks commit", cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "alias.ci.command", "-c core.hooksPath=.githooks commit", cwd=repo).rc == 0
+    gb.trust(repo)
     write_exec(repo / ".githooks/pre-commit", _evil(tmp_path))
 
 
-def attack_optional_hookspath_local(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_optional_hookspath_local(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[91] `core.hooksPath = :(optional).githooks` (git 2.52+): git
-    strips the prefix and runs `.githooks/<hook>`; gitwary watched
+    strips the prefix and runs `.githooks/<hook>`; gitblocker watched
     `<root>/:(optional).githooks`, which does not exist"""
     write_exec(repo / ".githooks/post-checkout", OK_HOOK)
-    assert gw.git("config", "core.hooksPath", ":(optional).githooks", cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "core.hooksPath", ":(optional).githooks", cwd=repo).rc == 0
+    gb.trust(repo)
     write_exec(repo / ".githooks/post-checkout", _evil(tmp_path))
 
 
-def attack_optional_hookspath_global(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_optional_hookspath_global(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[91] the same from ~/.gitconfig, the use case of `:(optional)`:
     "the repository's .githooks when there is one\""""
     write_exec(repo / ".githooks/post-checkout", OK_HOOK)
-    assert gw.git("config", "--global", "core.hooksPath", ":(optional).githooks").rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "--global", "core.hooksPath", ":(optional).githooks").rc == 0
+    gb.trust(repo)
     write_exec(repo / ".githooks/post-checkout", _evil(tmp_path))
 
 
-def attack_global_config_hook_relative_in_submodule(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_global_config_hook_relative_in_submodule(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[92] a global config hook with a relative command
     (`hook.conv.command = ./scripts/pc.sh`, git 2.54) runs in every
     repository git enters: `git submodule update` runs `sub/scripts/pc.sh`.
     The [68] re-resolution against each base covers DIR_KEYS only"""
     from tests.attacks._helpers import add_submodule, submodule_source_with
-    submodule_source_with(gw, tmp_path, {"scripts/pc.sh": OK_HOOK})
-    assert gw.git("config", "--global", "hook.conv.command", "./scripts/pc.sh").rc == 0
-    assert gw.git("config", "--global", "hook.conv.event", "post-checkout").rc == 0
-    sub = add_submodule(gw, repo, tmp_path)
-    gw.trust(repo)
+    submodule_source_with(gb, tmp_path, {"scripts/pc.sh": OK_HOOK})
+    assert gb.git("config", "--global", "hook.conv.command", "./scripts/pc.sh").rc == 0
+    assert gb.git("config", "--global", "hook.conv.event", "post-checkout").rc == 0
+    sub = add_submodule(gb, repo, tmp_path)
+    gb.trust(repo)
     write_exec(sub / "scripts/pc.sh", _evil(tmp_path))
 
 
-def attack_shared_include_in_superproject_and_submodule(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_shared_include_in_superproject_and_submodule(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[93] one file (`~/team.gitconfig`: core.hooksPath = .githooks)
     included by the superproject's config and by the submodule's: parsed
     once (`seen` keyed by path, not by base), its relative hooksPath
     resolved against the root only; git applies it in `sub/` too"""
     from tests.attacks._helpers import add_submodule, submodule_source_with
-    team = Path(gw.env["HOME"]) / "team.gitconfig"
+    team = Path(gb.env["HOME"]) / "team.gitconfig"
     team.write_text("[core]\n\thooksPath = .githooks\n")
-    submodule_source_with(gw, tmp_path, {".githooks/post-checkout": OK_HOOK})
-    sub = add_submodule(gw, repo, tmp_path)
-    assert gw.git("config", "include.path", "~/team.gitconfig", cwd=sub).rc == 0
-    assert gw.git("config", "include.path", "~/team.gitconfig", cwd=repo).rc == 0
-    gw.trust(repo)
+    submodule_source_with(gb, tmp_path, {".githooks/post-checkout": OK_HOOK})
+    sub = add_submodule(gb, repo, tmp_path)
+    assert gb.git("config", "include.path", "~/team.gitconfig", cwd=sub).rc == 0
+    assert gb.git("config", "include.path", "~/team.gitconfig", cwd=repo).rc == 0
+    gb.trust(repo)
     write_exec(sub / ".githooks/post-checkout", _evil(tmp_path))
 
 
-def attack_relative_include_inside_symlinked_include(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_relative_include_inside_symlinked_include(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[94] a relative `include.path = local.inc` inside an included
     file that is a symlink (`shared/team.inc -> real/team.inc`): git resolves
     it against the directory of the file as opened (`shared/local.inc`),
-    gitwary against the target's (`shared/real/local.inc`)"""
+    gitblocker against the target's (`shared/real/local.inc`)"""
     import os
     shared = tmp_path / "vol-shared"
     (shared / "real").mkdir(parents=True)
     (shared / "real/team.inc").write_text("[include]\n\tpath = local.inc\n")
     os.symlink("real/team.inc", shared / "team.inc")
-    assert gw.git("config", "include.path", str(shared / "team.inc"), cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "include.path", str(shared / "team.inc"), cwd=repo).rc == 0
+    gb.trust(repo)
     write_exec(shared / "pwn.sh", _evil(tmp_path) + "exit 1\n")
     (shared / "local.inc").write_text(f"[core]\n\tfsmonitor = {shared / 'pwn.sh'}\n")
 
 
-def attack_ssh_config_glued_to_short_option(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_ssh_config_glued_to_short_option(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[96] `core.sshCommand = ssh -F./deploy/ssh_config`: the path
     glued to a short option is one token starting with `-`, dropped; ssh
     reads the file, a ProxyCommand planted there runs on `git fetch`"""
     (repo / "deploy").mkdir()
     (repo / "deploy/ssh_config").write_text("Host *\n\tBatchMode yes\n")
-    assert gw.git("config", "core.sshCommand", "ssh -F./deploy/ssh_config", cwd=repo).rc == 0
-    assert gw.git("remote", "add", "origin", "ssh://deploy.invalid/r.git", cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "core.sshCommand", "ssh -F./deploy/ssh_config", cwd=repo).rc == 0
+    assert gb.git("remote", "add", "origin", "ssh://deploy.invalid/r.git", cwd=repo).rc == 0
+    gb.trust(repo)
     (repo / "deploy/ssh_config").write_text(
         f"Host *\n\tProxyCommand sh -c \"touch '{tmp_path}/RAN'; exit 1\"\n")
 
 
-def attack_ssh_config_glued_in_option_cluster(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_ssh_config_glued_in_option_cluster(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[96] the same in a cluster, `ssh -vF./deploy/ssh_config` (`-v`, then
     `-F` holding the rest of the word): found replaying the first fix, which
     only took what follows `-F`"""
     (repo / "deploy").mkdir()
     (repo / "deploy/ssh_config").write_text("Host *\n\tBatchMode yes\n")
-    assert gw.git("config", "core.sshCommand", "ssh -vF./deploy/ssh_config", cwd=repo).rc == 0
-    assert gw.git("remote", "add", "origin", "ssh://deploy.invalid/r.git", cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "core.sshCommand", "ssh -vF./deploy/ssh_config", cwd=repo).rc == 0
+    assert gb.git("remote", "add", "origin", "ssh://deploy.invalid/r.git", cwd=repo).rc == 0
+    gb.trust(repo)
     (repo / "deploy/ssh_config").write_text(
         f"Host *\n\tProxyCommand sh -c \"touch '{tmp_path}/RAN'; exit 1\"\n")
 
 
 # ------------------------------------------------ [128] git's installation prefix
-def git_prefix(gw: GW) -> Path:
+def git_prefix(gb: GB) -> Path:
     """What git substitutes for `%(prefix)/` (interpolate_path), asked of
     the git the scenario is built with: the attack needs the value git
-    computes; gitwary must find it without running git."""
-    r = gw.git("-c", "x.p=%(prefix)/", "config", "--type=path", "x.p")
+    computes; gitblocker must find it without running git."""
+    r = gb.git("-c", "x.p=%(prefix)/", "config", "--type=path", "x.p")
     assert r.rc == 0 and r.out.startswith("/"), r.text
     return Path(r.out.strip())
 
 
-def prefix_relative(gw: GW, target: Path) -> str:
+def prefix_relative(gb: GB, target: Path) -> str:
     """`%(prefix)/../../<target>`: the volume reached from git's prefix. The
     `..` are resolved by the kernel on the installed path (on Homebrew
     `opt/git` is a symlink to `Cellar/git/<v>`), so the relative path is
     computed from the prefix's real location."""
     import os
-    return "%(prefix)/" + os.path.relpath(target, os.path.realpath(git_prefix(gw)))
+    return "%(prefix)/" + os.path.relpath(target, os.path.realpath(git_prefix(gb)))
 
 
-def attack_hookspath_prefix(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_prefix(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[128] core.hooksPath = %(prefix)/../…/vol-hooks: git expands its
     installation prefix (interpolate_path, before `~`), _expand2 watches the
     literal `<root>/%(prefix)/…`, which does not exist"""
     hooks = tmp_path / "vol-hooks"
     write_exec(hooks / "post-checkout", OK_HOOK)
-    assert gw.git("config", "core.hooksPath", prefix_relative(gw, hooks), cwd=repo).rc == 0
-    r = gw.git("rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=repo)
+    assert gb.git("config", "core.hooksPath", prefix_relative(gb, hooks), cwd=repo).rc == 0
+    r = gb.git("rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=repo)
     assert Path(r.out.strip()).resolve() == hooks.resolve(), r.text
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(hooks / "post-checkout", _evil(tmp_path))
 
 
-def attack_include_prefix(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_include_prefix(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[128] include.path = %(prefix)/../…/shared.gitconfig in the volume:
-    git opens it (handle_path_include expands the prefix too), gitwary
+    git opens it (handle_path_include expands the prefix too), gitblocker
     never does"""
     inc = tmp_path / "shared.gitconfig"
     inc.write_text("[x]\n\tincluded = 1\n")
-    assert gw.git("config", "include.path", prefix_relative(gw, inc), cwd=repo).rc == 0
-    assert gw.git("config", "--get", "x.included", cwd=repo).out.strip() == "1", "git must open it"
-    gw.trust(repo)
+    assert gb.git("config", "include.path", prefix_relative(gb, inc), cwd=repo).rc == 0
+    assert gb.git("config", "--get", "x.included", cwd=repo).out.strip() == "1", "git must open it"
+    gb.trust(repo)
     inc.write_text("[core]\n\tfsmonitor = /tmp/evil\n")
 
 
 # [151] `url.<base>.insteadOf`: a remote written as a network URL that git
 # rewrites into a local path. The rule is the user's own, trusted (a mirror
 # directory); the hub it reaches was never watched.
-def _mirror_behind_insteadof(gw: GW, repo: Path, tmp_path: Path, key: str, scope: list[str]) -> None:
+def _mirror_behind_insteadof(gb: GB, repo: Path, tmp_path: Path, key: str, scope: list[str]) -> None:
     hub = tmp_path / "vol-mirrors/x/hub.git"
-    gw.git("init", "-q", "--bare", str(hub))
-    assert gw.git("config", *scope, f"url.{tmp_path}/vol-mirrors/.{key}",
+    gb.git("init", "-q", "--bare", str(hub))
+    assert gb.git("config", *scope, f"url.{tmp_path}/vol-mirrors/.{key}",
                   "https://example.invalid/", cwd=repo).rc == 0
-    gw.git("remote", "add", "origin", "https://example.invalid/x/hub.git", cwd=repo)
+    gb.git("remote", "add", "origin", "https://example.invalid/x/hub.git", cwd=repo)
     how = ["--push"] if key == "pushInsteadOf" else []
-    assert gw.git("remote", "get-url", *how, "origin", cwd=repo).out.strip() == str(hub), \
+    assert gb.git("remote", "get-url", *how, "origin", cwd=repo).out.strip() == str(hub), \
         "git must push to the hub"
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_insteadof_global_reaches_local_hub(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_insteadof_global_reaches_local_hub(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[151] a global `url.<dir>.insteadOf = https://…`: `git push origin`
     runs the hooks of `<dir>/…`, which the scan read as a network URL"""
-    _mirror_behind_insteadof(gw, repo, tmp_path, "insteadOf", ["--global"])
+    _mirror_behind_insteadof(gb, repo, tmp_path, "insteadOf", ["--global"])
 
 
-def attack_insteadof_local_reaches_local_hub(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_insteadof_local_reaches_local_hub(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[151] the same rule in the repository's own trusted config"""
-    _mirror_behind_insteadof(gw, repo, tmp_path, "insteadOf", [])
+    _mirror_behind_insteadof(gb, repo, tmp_path, "insteadOf", [])
 
 
-def attack_pushinsteadof_reaches_local_hub(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_pushinsteadof_reaches_local_hub(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[151] `url.<dir>.pushInsteadOf`: the push URL alone is rewritten"""
-    _mirror_behind_insteadof(gw, repo, tmp_path, "pushInsteadOf", ["--global"])
+    _mirror_behind_insteadof(gb, repo, tmp_path, "pushInsteadOf", ["--global"])
 
 
 # [152] a tab or a lone CR between two words of an unquoted value: one
 # space for git < 2.45 (Debian 12, Ubuntu 24.04), the character itself
 # since. The config is the user's own, trusted; whichever git runs, what it
 # names is watched.
-def attack_hookspath_tab_between_words(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_tab_between_words(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[152] `core.hooksPath = my<TAB>hooks`: git < 2.45 runs the hooks of `my hooks`"""
-    _hooks_in_tree_then_rewritten(gw, repo, b"[core]\n\thooksPath = my\thooks\n", "my hooks")
+    _hooks_in_tree_then_rewritten(gb, repo, b"[core]\n\thooksPath = my\thooks\n", "my hooks")
 
 
-def attack_hookspath_cr_between_words(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_cr_between_words(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[152] the same with a lone CR"""
-    _hooks_in_tree_then_rewritten(gw, repo, b"[core]\n\thooksPath = my\rhooks\n", "my hooks")
+    _hooks_in_tree_then_rewritten(gb, repo, b"[core]\n\thooksPath = my\rhooks\n", "my hooks")
 
 
-def attack_hookspath_tab_after_continuation(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_hookspath_tab_after_continuation(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[152] the tab that indents a continuation line: `my\\<LF><TAB>hooks`"""
-    _hooks_in_tree_then_rewritten(gw, repo, b"[core]\n\thooksPath = my\\\n\thooks\n", "my hooks")
+    _hooks_in_tree_then_rewritten(gb, repo, b"[core]\n\thooksPath = my\\\n\thooks\n", "my hooks")
 
 
-def attack_include_tab_between_words(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_include_tab_between_words(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[152] `include.path = ../my<TAB>inc`: git < 2.45 reads `my inc`"""
     inc = repo / "my inc"
     inc.write_text("[core]\n")
     cfg = repo / ".git/config"
     cfg.write_bytes(cfg.read_bytes() + b"[include]\n\tpath = ../my\tinc\n")
-    gw.trust(repo)
+    gb.trust(repo)
     inc.write_text("[core]\n\tsshCommand = /tmp/evil\n")
 
 
-def attack_local_remote_tab_between_words(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_local_remote_tab_between_words(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[152] `remote.origin.url = <dir>/my<TAB>hub.git`: git < 2.45 pushes to `my hub.git`"""
     hub = tmp_path / "my hub.git"
-    gw.git("init", "-q", "--bare", str(hub))
+    gb.git("init", "-q", "--bare", str(hub))
     cfg = repo / ".git/config"
     cfg.write_bytes(cfg.read_bytes() + f'[remote "origin"]\n\turl = {tmp_path}/my\thub.git\n'.encode())
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(hub / "hooks/pre-receive", "#!/bin/sh\ntouch /tmp/evil\n")
 
 
-def attack_alias_quoted_program_tab(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alias_quoted_program_tab(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[152] `alias.zz = !'./my<TAB>tools/ed'`: sh runs `./my tools/ed` under git < 2.45"""
     write_exec(repo / "my tools/ed", "#!/bin/sh\nexit 0\n")
     cfg = repo / ".git/config"
     cfg.write_bytes(cfg.read_bytes() + b"[alias]\n\tzz = !'./my\ttools/ed'\n")
-    gw.trust(repo)
+    gb.trust(repo)
     write_exec(repo / "my tools/ed")
 
 
 # [156] a repository the trusted one borrows objects from (`clone
 # --reference`, `objects/info/alternates`): git runs `for-each-ref` there at
-# every fetch, a child gitwary lets through; what that child reads is
+# every fetch, a child gitblocker lets through; what that child reads is
 # watched like a local remote's.
-def _borrows(gw: GW, repo: Path, tmp_path: Path) -> Path:
+def _borrows(gb: GB, repo: Path, tmp_path: Path) -> Path:
     """The user: `repo` borrows from a mirror of the volume, and trusted it so."""
     mirror = tmp_path / "vol-mirror.git"
-    gw.git("init", "-q", "--bare", str(mirror))
+    gb.git("init", "-q", "--bare", str(mirror))
     (repo / ".git/objects/info/alternates").write_text(f"{mirror}/objects\n")
-    gw.trust(repo)
+    gb.trust(repo)
     return mirror
 
 
-def attack_alternate_repository_config(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alternate_repository_config(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[156] the config of the repository an alternate belongs to, rewritten: the `for-each-ref` child of every fetch reads it"""
-    mirror = _borrows(gw, repo, tmp_path)
+    mirror = _borrows(gb, repo, tmp_path)
     with open(mirror / "config", "a") as f:
         f.write("[core]\n\tfsmonitor = touch /tmp/evil\n")
 
 
-def attack_alternate_repository_include(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alternate_repository_include(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[156] a file the alternate's config includes, rewritten"""
     mirror = tmp_path / "vol-mirror.git"
-    gw.git("init", "-q", "--bare", str(mirror))
+    gb.git("init", "-q", "--bare", str(mirror))
     (mirror / "extra.inc").write_text("[core]\n\tabbrev = 12\n")
-    gw.git("config", "include.path", "extra.inc", cwd=mirror)
+    gb.git("config", "include.path", "extra.inc", cwd=mirror)
     (repo / ".git/objects/info/alternates").write_text(f"{mirror}/objects\n")
-    gw.trust(repo)
+    gb.trust(repo)
     (mirror / "extra.inc").write_text("[core]\n\tfsmonitor = touch /tmp/evil\n")
 
 
-def attack_alternate_repository_commondir(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alternate_repository_commondir(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[156] `commondir` planted in the alternate's repository: the child takes its config from the directory it names"""
-    mirror = _borrows(gw, repo, tmp_path)
+    mirror = _borrows(gb, repo, tmp_path)
     evil = tmp_path / "vol-evil.git"
-    gw.git("init", "-q", "--bare", str(evil))
-    gw.git("config", "core.fsmonitor", "touch /tmp/evil", cwd=evil)
+    gb.git("init", "-q", "--bare", str(evil))
+    gb.git("config", "core.fsmonitor", "touch /tmp/evil", cwd=evil)
     (mirror / "commondir").write_text(f"{evil}\n")
 
 
-def attack_alternate_of_the_alternate(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alternate_of_the_alternate(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[156] the alternate's own `objects/info/alternates`, planted: git follows it and enters the repository it names"""
-    mirror = _borrows(gw, repo, tmp_path)
+    mirror = _borrows(gb, repo, tmp_path)
     evil = tmp_path / "vol-evil.git"
-    gw.git("init", "-q", "--bare", str(evil))
-    gw.git("config", "core.fsmonitor", "touch /tmp/evil", cwd=evil)
+    gb.git("init", "-q", "--bare", str(evil))
+    gb.git("config", "core.fsmonitor", "touch /tmp/evil", cwd=evil)
     (mirror / "objects/info/alternates").write_text(f"{evil}/objects\n")
 
 
-def attack_alternate_object_store_becomes_a_repository(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alternate_object_store_becomes_a_repository(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[156] an alternate that was a bare object store (no `refs/` beside it, git entered nothing): the sandbox makes it a repository, config included"""
     store = tmp_path / "vol-store"
     (store / "objects").mkdir(parents=True)
     (repo / ".git/objects/info/alternates").write_text(f"{store}/objects\n")
-    gw.trust(repo)
+    gb.trust(repo)
     (store / "refs").mkdir()
     (store / "HEAD").write_text("ref: refs/heads/main\n")
     (store / "config").write_text("[core]\n\tfsmonitor = touch /tmp/evil\n")
 
 
-def attack_alternate_repository_hook(gw: GW, repo: Path, tmp_path: Path) -> None:
+def attack_alternate_repository_hook(gb: GB, repo: Path, tmp_path: Path) -> None:
     """[156] a hook planted in the alternate's repository: the marker covers every git a child runs there, not `for-each-ref` alone"""
-    mirror = _borrows(gw, repo, tmp_path)
+    mirror = _borrows(gb, repo, tmp_path)
     write_exec(mirror / "hooks/pre-auto-gc", "#!/bin/sh\ntouch /tmp/evil\n")

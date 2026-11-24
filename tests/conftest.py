@@ -1,6 +1,6 @@
-"""Shared fixtures: isolated environment, throwaway repositories, gitwary runner.
+"""Shared fixtures: isolated environment, throwaway repositories, gitblocker runner.
 
-Nothing touches the machine: HOME, GITWARY_STATE and the global git config
+Nothing touches the machine: HOME, GITBLOCKER_STATE and the global git config
 live in a temporary directory private to each test.
 """
 from __future__ import annotations
@@ -14,31 +14,31 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-GITWARY = ROOT / "gitwary.py"
+GITBLOCKER = ROOT / "gitblocker.py"
 sys.path.insert(0, str(ROOT))
 
 
-def _is_gitwary(p: Path) -> bool:
+def _is_gitblocker(p: Path) -> bool:
     try:
         with open(p, "rb") as f:
-            return b"gitwary" in f.read(512)
+            return b"gitblocker" in f.read(512)
     except OSError:
         return False
 
 
 def _real_git() -> str:
     """The git the scenarios are built with. On a machine with the system-wide
-    install, the `git` of the PATH is already gitwary (`/usr/bin/git →
-    gitwary`, the real one diverted to `git.real`): every scenario would then
+    install, the `git` of the PATH is already gitblocker (`/usr/bin/git →
+    gitblocker`, the real one diverted to `git.real`): every scenario would then
     be refused as "never trusted" by the test's own isolated state."""
-    if os.environ.get("GITWARY_REAL_GIT"):
-        return os.environ["GITWARY_REAL_GIT"]
+    if os.environ.get("GITBLOCKER_REAL_GIT"):
+        return os.environ["GITBLOCKER_REAL_GIT"]
     for d in os.environ.get("PATH", os.defpath).split(os.pathsep):
         for name in ("git", "git.real"):
             cand = Path(d or ".") / name
-            if cand.is_file() and os.access(cand, os.X_OK) and not _is_gitwary(cand):
+            if cand.is_file() and os.access(cand, os.X_OK) and not _is_gitblocker(cand):
                 return str(cand)
-    raise RuntimeError("no git other than gitwary in the PATH: set GITWARY_REAL_GIT")
+    raise RuntimeError("no git other than gitblocker in the PATH: set GITBLOCKER_REAL_GIT")
 
 
 REAL_GIT = _real_git()
@@ -47,16 +47,16 @@ REAL_GIT = _real_git()
 def _exec_paths(base: Path) -> tuple[Path, Path]:
     """Two exec paths (DESIGN-exec-path.md). The scenarios are built with the
     real git and **raw** children (`raw/git` is the real binary), the checks
-    run with the **wrapped** exec path (`wrapped/git` is gitwary, `git.real`
+    run with the **wrapped** exec path (`wrapped/git` is gitblocker, `git.real`
     next to it): git puts the exec path first in its children's PATH, so a
-    child git of the checked command is gitwary, as it is on a machine
+    child git of the checked command is gitblocker, as it is on a machine
     where the exec path is diverted. Every other entry of the real exec
     path (helpers, scripts) is linked into both."""
     r = subprocess.run([REAL_GIT, "--exec-path"], capture_output=True, text=True)
     real_core = Path(r.stdout.strip())
     real_bin = real_core / "git.real" if (real_core / "git.real").exists() else real_core / "git"
-    if _is_gitwary(real_bin):
-        raise RuntimeError(f"{real_bin} is gitwary and no git.real sits next to it")
+    if _is_gitblocker(real_bin):
+        raise RuntimeError(f"{real_bin} is gitblocker and no git.real sits next to it")
     raw, wrapped = base / "exec-raw", base / "exec-wrapped"
     git_inode = (real_core / "git").resolve()
     for d in (raw, wrapped):
@@ -69,7 +69,7 @@ def _exec_paths(base: Path) -> tuple[Path, Path]:
             else:
                 os.symlink(real_core / n, d / n)
     os.symlink(real_bin, raw / "git")
-    os.symlink(GITWARY, wrapped / "git")
+    os.symlink(GITBLOCKER, wrapped / "git")
     os.symlink(real_bin, wrapped / "git.real")
     return raw, wrapped
 
@@ -97,9 +97,9 @@ class Result:
 
 
 @dataclass
-class GW:
-    """Run gitwary.py (or raw git) in an isolated environment. `env` has the
-    wrapped exec path (a child git of a checked command is gitwary);
+class GB:
+    """Run gitblocker.py (or raw git) in an isolated environment. `env` has the
+    wrapped exec path (a child git of a checked command is gitblocker);
     `raw_env` the raw one, for building scenarios and for positive controls
     that need the real git to enter a repository."""
     env: dict[str, str]
@@ -111,7 +111,7 @@ class GW:
         return {**self.env, "GIT_EXEC_PATH": str(self.raw_exec)}
 
     def run(self, *args: str, cwd: Path | None = None, stdin: str | None = None) -> Result:
-        r = subprocess.run([sys.executable, str(GITWARY), *args], cwd=cwd, env=self.env,
+        r = subprocess.run([sys.executable, str(GITBLOCKER), *args], cwd=cwd, env=self.env,
                            capture_output=True, text=True, input=stdin, errors="replace")
         return Result(r.returncode, r.stdout, r.stderr)
 
@@ -124,7 +124,7 @@ class GW:
         return r
 
     def git(self, *args: str, cwd: Path | None = None) -> Result:
-        """Raw git, bypassing gitwary — to build the scenarios."""
+        """Raw git, bypassing gitblocker — to build the scenarios."""
         r = subprocess.run(["git", *args], cwd=cwd, env=self.raw_env, capture_output=True,
                            text=True, errors="replace")
         return Result(r.returncode, r.stdout, r.stderr)
@@ -140,7 +140,7 @@ def exec_paths(tmp_path_factory) -> tuple[Path, Path]:
 
 
 @pytest.fixture
-def gw(tmp_path: Path, exec_paths: tuple[Path, Path]) -> GW:
+def gb(tmp_path: Path, exec_paths: tuple[Path, Path]) -> GB:
     raw, wrapped = exec_paths
     home = tmp_path / "home"
     state = tmp_path / "state"
@@ -151,15 +151,15 @@ def gw(tmp_path: Path, exec_paths: tuple[Path, Path]) -> GW:
     env = {
         "PATH": f"{realgit}{os.pathsep}{os.environ['PATH']}",
         "HOME": str(home),
-        "GITWARY_STATE": str(state),
+        "GITBLOCKER_STATE": str(state),
         "GIT_CONFIG_NOSYSTEM": "1",
         "NO_COLOR": "1",
         "LC_ALL": "C.UTF-8",
-        "GITWARY_NO_NOTIFY": "1",   # the suite never notifies a developer's desktop
-        "GITWARY_WAIT": "0",        # nor blocks: the waiting tests set their own value
+        "GITBLOCKER_NO_NOTIFY": "1",   # the suite never notifies a developer's desktop
+        "GITBLOCKER_WAIT": "0",        # nor blocks: the waiting tests set their own value
         "GIT_EXEC_PATH": str(wrapped),
     }
-    g = GW(env, state, raw)
+    g = GB(env, state, raw)
     for k, v in [("user.email", "t@t"), ("user.name", "t"), ("init.defaultBranch", "main"),
                  ("protocol.file.allow", "always")]:
         assert g.git("config", "--global", k, v).rc == 0
@@ -167,25 +167,25 @@ def gw(tmp_path: Path, exec_paths: tuple[Path, Path]) -> GW:
 
 
 @pytest.fixture
-def repo(gw: GW, tmp_path: Path) -> Path:
-    """Clean repository with one commit, trusted by gitwary."""
+def repo(gb: GB, tmp_path: Path) -> Path:
+    """Clean repository with one commit, trusted by gitblocker."""
     r = tmp_path / "repo"
-    assert gw.git("init", "-q", str(r)).rc == 0
+    assert gb.git("init", "-q", str(r)).rc == 0
     (r / "f").write_text("a\n")
-    assert gw.git("add", "f", cwd=r).rc == 0
-    assert gw.git("commit", "-qm", "init", cwd=r).rc == 0
-    gw.trust(r)
+    assert gb.git("add", "f", cwd=r).rc == 0
+    assert gb.git("commit", "-qm", "init", cwd=r).rc == 0
+    gb.trust(r)
     return r
 
 
 @pytest.fixture
-def subsrc(gw: GW, tmp_path: Path) -> Path:
+def subsrc(gb: GB, tmp_path: Path) -> Path:
     """Small source repository for submodules and clones."""
     s = tmp_path / "subsrc"
-    assert gw.git("init", "-q", str(s)).rc == 0
+    assert gb.git("init", "-q", str(s)).rc == 0
     (s / "s").write_text("s\n")
-    assert gw.git("add", "s", cwd=s).rc == 0
-    assert gw.git("commit", "-qm", "s", cwd=s).rc == 0
+    assert gb.git("add", "s", cwd=s).rc == 0
+    assert gb.git("commit", "-qm", "s", cwd=s).rc == 0
     return s
 
 

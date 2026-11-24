@@ -1,4 +1,4 @@
-# gitwary at git's exec path — design draft
+# gitblocker at git's exec path — design draft
 
 Branch `exec-path-wrap`, 2026-10-26. A working document: it will be reworked
 here and merged into DESIGN.md once the implementation has settled. Steps 1
@@ -20,11 +20,11 @@ the `git` of the user's PATH: `setup_path()` (`exec-cmd.c`) puts the
 **exec path** first in the child's PATH and exports `GIT_EXEC_PATH`, so the
 child is `<exec-path>/git` — `/usr/lib/git-core/git` on Debian,
 `/opt/homebrew/libexec/git-core/git` with Homebrew — the real binary. A
-`git → gitwary` symlink ahead of the PATH wraps the first process of a
+`git → gitblocker` symlink ahead of the PATH wraps the first process of a
 command and none of its children. DESIGN.md says it in one line ("only
 covers invocations that go through the wrapper"); the line hides a family.
 
-gitwary has emulated the child's judgment from the parent: a gitlink
+gitblocker has emulated the child's judgment from the parent: a gitlink
 barrier in the index ([14]), then a `-c diff.ignoreSubmodules=dirty` switch
 when a command brings a gitlink ([66]), then the list of commands that
 bring one ([77]), then autocorrect ([78]), then the inversion to a closed
@@ -36,26 +36,26 @@ more. Thirteen catalogue entries are this family: [6] [7] [14] [24] [36]
 
 **Experiment (Debian 13 VM, git 1:2.47.3, 2026-10-26).** `/usr/bin/git` was
 already a `dpkg-divert` to `git.real`; `/usr/lib/git-core/git` was not.
-Diverting it too, with gitwary handling the `git-<cmd>` name: the suite
+Diverting it too, with gitblocker handling the `git-<cmd>` name: the suite
 gave 1040 passed, 210 failed, and **six strict XPASS — [89] ×5 and [95]**,
 the only xfails of this family. The positive controls of [66] fail in the
 right direction: the real git can no longer enter the planted repository.
 The 210 failures are three classes, all design (section 6), none a flaw of
-the idea. Per-child cost on a trusted repository, same gitwary as parent
+the idea. Per-child cost on a trusted repository, same gitblocker as parent
 and child: `log -1` 26 ms (no child), `commit` 26 → 50 ms (one child), an
 alias with three children 27 → 101 ms. About 25 ms per child on the VM,
 the Python floor plus the check; ~35 ms expected on macOS.
 
 ## 2. The model
 
-> A repository is judged once per user command, by the first gitwary that
+> A repository is judged once per user command, by the first gitblocker that
 > opens it. Every other repository git enters during that command is judged
-> at entry, by the gitwary that is its first process there. What a command
+> at entry, by the gitblocker that is its first process there. What a command
 > writes into a judged repository is judged at the next command.
 
-The first sentence is today's gitwary. The second replaces the guessing:
+The first sentence is today's gitblocker. The second replaces the guessing:
 there is no longer a question "will this command enter a submodule?" —
-whatever enters, enters through gitwary. The third sentence is the
+whatever enters, enters through gitblocker. The third sentence is the
 boundary kept on purpose: [44] (a tracked hook checked out, then run) and
 [95] (a tracked include checked out, then read by the `maintenance` child)
 are the same repository, the same command; they stay accepted limitations
@@ -88,21 +88,21 @@ the divert layout that is `/usr/lib/git-core/git.real` for a child and
 `/usr/bin/git.real` for the user's command. No recursion: the real git's
 exec path is compiled in (Debian builds without `RUNTIME_PREFIX`, checked:
 the binary copied elsewhere still answers `/usr/lib/git-core`), so the
-real git finds its helpers, and its `git` children resolve to gitwary.
+real git finds its helpers, and its `git` children resolve to gitblocker.
 
 ### 3.2 The judgment marker
 
-When gitwary has judged a repository and runs the real git, it puts in
+When gitblocker has judged a repository and runs the real git, it puts in
 that process's environment:
 
 ```
-GITWARY_JUDGED=<pid>.<start>:repo=<gitdir>,<common dir>,<root>,<label>
+GITBLOCKER_JUDGED=<pid>.<start>:repo=<gitdir>,<common dir>,<root>,<label>
 ```
 
 the paths resolved and hex-encoded (a path holds anything but NUL, the
 one byte an environment value cannot; `label` is the directory the state
 key is named after, for a child that must read the parent's manifest),
-`pid` and `start` the process that set it and its start time: gitwary
+`pid` and `start` the process that set it and its start time: gitblocker
 itself, which execs the real git under its own pid, or stays the parent of
 a clone it waits for.
 
@@ -111,10 +111,10 @@ the environment of the user's git: the user's shell, a `direnv allow`, a
 trusted hook or alias. The sandbox writes into the volume, never into a
 host process's environment, and no config value it controls becomes one
 (everything that runs is in the fingerprint; a planted repository's config
-is never read by the real git, gitwary refuses first). That class —
+is never read by the real git, gitblocker refuses first). That class —
 `PATH`, `GIT_DIR`, `GIT_CONFIG_GLOBAL` set by an attacker — is out of the
-model already ("Known limitations"); every other variable gitwary reads
-(`GITWARY_REAL_GIT`, `GITWARY_STATE`, git's own) is trusted the same way,
+model already ("Known limitations"); every other variable gitblocker reads
+(`GITBLOCKER_REAL_GIT`, `GITBLOCKER_STATE`, git's own) is trusted the same way,
 and a signed marker would be the one exception, a secret to store, prune
 and permission for no threat in the model.
 
@@ -144,7 +144,7 @@ mid-command, not only its cost — every submodule of a clone longer than a
 minute refused as never trusted, a `rebase --exec` stopped half-way — and
 a stale marker in an editor's shell keeping child semantics for ever.
 
-A gitwary child reads the marker before anything else. It applies the
+A gitblocker child reads the marker before anything else. It applies the
 global options (`-C`, `--git-dir`: they decide which repository), finds the
 root, opens the repository and:
 
@@ -212,7 +212,7 @@ own trust key for the **user's** commands, as before.
 
 ### 3.4 Two more marker values
 
-- `GITWARY_JUDGED=<pid>.<start>:new=<path>[,<gitdir>]` — set by `run_git` for
+- `GITBLOCKER_JUDGED=<pid>.<start>:new=<path>[,<gitdir>]` — set by `run_git` for
   `clone` and `init` (the parent judges nothing: the repository does not
   exist yet; auto-trust comes after git returns). Covered: a repository
   whose gitdir and common dir are the gitdir the command creates —
@@ -245,7 +245,7 @@ own trust key for the **user's** commands, as before.
   `git-upload-archive` (`TRANSPORT`, the dashed names sshd runs) and the
   same as a first word (`SERVERS`: what `git daemon`, `http-backend` and
   `git-shell` run, [106]) serve the repository named by their argument, a
-  bare one gitwary does not handle, and run nothing of the cwd's. The
+  bare one gitblocker does not handle, and run nothing of the cwd's. The
   passthrough sets an ordinary `repo` marker for that repository, opened
   as enter_repo opens it (`_local_remote`), with an empty root and label:
   nobody judged it as a whole. Its children (`index-pack`, `pack-objects`,
@@ -265,13 +265,13 @@ own trust key for the **user's** commands, as before.
 
 A child shares the parent's session and terminal. The exec-mode behaviour
 of a refusal (a `[y/N]` on `/dev/tty`, or without a terminal a `pending`
-record and a wait of `GITWARY_WAIT` seconds) is wrong there: the parent
+record and a wait of `GITBLOCKER_WAIT` seconds) is wrong there: the parent
 git may be reading stdin or holding the pager, and a `git status` meeting
 a planted repository would hang a minute. With a live marker present,
 whatever its value:
 
 - a refusal is **immediate**: no question, no wait; the `pending` record
-  is written (the user sees it with `gitwary pending`), the desktop
+  is written (the user sees it with `gitblocker pending`), the desktop
   notification is not sent (the parent's stderr carries the message);
 - nothing is written to **stdout** (git parses the child's stdout:
   `status --porcelain=2`, `rev-parse`); exec mode already keeps its
@@ -293,7 +293,7 @@ own auto-trust, takes as a whole; the new repository is opened at its
 path, not through the `GIT_DIR` git exports to that child.
 
 The parent git sees the refused child fail: `git checkout` prints "Could
-not run 'git status --porcelain=2' in submodule vendor/x" after gitwary's
+not run 'git status --porcelain=2' in submodule vendor/x" after gitblocker's
 own "repository never trusted: …/vendor/x" on stderr, and exits non-zero.
 `commit` ignores its `maintenance` child's failure, as git documents.
 
@@ -313,12 +313,12 @@ them).
 
 The switch and the exemption are removed; a machine whose exec path is not
 wrapped would then be *less* protected than today ([66] open). So the wrap
-is a precondition gitwary checks, at `trust`, `retrust` and `list` (where
+is a precondition gitblocker checks, at `trust`, `retrust` and `list` (where
 `check_safe_bare` already warns): `<exec-path>/git` must resolve to
-gitwary itself, the exec path being `GIT_EXEC_PATH` if set, else what the
+gitblocker itself, the exec path being `GIT_EXEC_PATH` if set, else what the
 real git answers to `--exec-path`. That is one run of the real git without
 a repository, the same class as `git --version` (no `RUN_SETUP`), and the
-only git gitwary ever runs. Not on every command: a warning repeated a
+only git gitblocker ever runs. Not on every command: a warning repeated a
 hundred times is ignored. Whether an unwrapped exec path is a warning or a
 refusal to `trust` is open (section 9).
 
@@ -326,7 +326,7 @@ refusal to `trust` is open (section 9).
 
 1. The marker (3.2), the coverage rule (3.3), `new` and the served repository (3.4),
    the child behaviour (3.5), the passthroughs (3.6), the `git-<cmd>` name
-   (3.1): gitwary works both wrapped and unwrapped.
+   (3.1): gitblocker works both wrapped and unwrapped.
 2. The verification (3.7) and the Debian install (section 4).
 3. The tests (section 7) on the wrapped VM.
 4. Only then, the removal of the switch and the exemption, and the
@@ -338,14 +338,14 @@ refusal to `trust` is open (section 9).
 
 The mechanism Debian provides for one package to replace a file of
 another: dpkg records the diversion and, on every upgrade of `git`,
-installs the new binary at the diverted name, never over gitwary.
+installs the new binary at the diverted name, never over gitblocker.
 `/usr/bin/git` is already diverted this way on the VM (`--package
-gitwary`, since 2026-10-19). The exec path needs the same:
+gitblocker`, since 2026-10-19). The exec path needs the same:
 
 ```sh
-dpkg-divert --package gitwary --add --rename \
+dpkg-divert --package gitblocker --add --rename \
     --divert /usr/lib/git-core/git.real /usr/lib/git-core/git
-ln -s /usr/bin/gitwary /usr/lib/git-core/git
+ln -s /usr/bin/gitblocker /usr/lib/git-core/git
 ```
 
 Facts that make this one file enough (checked on git 1:2.47.3-0+deb13u1):
@@ -356,29 +356,29 @@ wherever its file sits; `/usr/bin/git` and `/usr/lib/git-core/git` are two
 separate files in the package (not a hard-link pair), so each diversion is
 independent. The non-git programs of the directory (`git-remote-https`,
 `git-http-backend`, `git-daemon`, the shell and perl scripts) are untouched
-and keep working: they call `git`, which is gitwary.
+and keep working: they call `git`, which is gitblocker.
 
-The proper form is a `gitwary` package: `Depends: git, python3`; `preinst`
-adds the two diversions (`--package gitwary`, so `apt upgrade git` and
-`apt remove gitwary` never fight), the package ships `/usr/bin/gitwary`
+The proper form is a `gitblocker` package: `Depends: git, python3`; `preinst`
+adds the two diversions (`--package gitblocker`, so `apt upgrade git` and
+`apt remove gitblocker` never fight), the package ships `/usr/bin/gitblocker`
 and the two symlinks as its own files, `postrm remove` removes the
-diversions with `--rename` — `apt remove gitwary` restores the original
+diversions with `--rename` — `apt remove gitblocker` restores the original
 git byte for byte. The example in `dpkg-divert(1)` is this shape. Written
 as such: `packaging/deb/` (DESIGN.md, "Deployment").
 
 Verification from any directory:
 
 ```sh
-git -c alias.w='!readlink -f $(which git)' w     # /usr/bin/gitwary
+git -c alias.w='!readlink -f $(which git)' w     # /usr/bin/gitblocker
 ```
 
 ### 4.2 macOS, or no root: a shim exec path
 
 Homebrew has no diversion; `brew upgrade git` replaces the Cellar. The
 only clean handle is `GIT_EXEC_PATH`, which git honours before its
-compiled path: a directory `~/.local/lib/gitwary-exec/` holding `git →
-gitwary`, `git.real → <Cellar>/libexec/git-core/git`, and a symlink for
-every other entry of that directory, built and rebuilt by `gitwary
+compiled path: a directory `~/.local/lib/gitblocker-exec/` holding `git →
+gitblocker`, `git.real → <Cellar>/libexec/git-core/git`, and a symlink for
+every other entry of that directory, built and rebuilt by `gitblocker
 exec-path [<dir>]` (it links the entries by Homebrew's stable
 `opt/git/libexec/git-core` path, so an upgrade breaks only what it adds
 or removes); `GIT_EXEC_PATH` set for the session (`launchctl setenv` for
@@ -391,11 +391,11 @@ today's protection. The same shim is the test tool for experiments without
 root (it is how the per-child numbers above were measured), and the
 per-user install on Linux (README, "Per user"); `_core_exec_path` takes
 `git.real` of the real exec path when the diversion left one, whatever
-gitwary that path's `git` is.
+gitblocker that path's `git` is.
 
 ### 4.3 The VM
 
-`/usr/bin/gitwary` on the VM is the version of 2026-10-19: it still hashed
+`/usr/bin/gitblocker` on the VM is the version of 2026-10-19: it still hashed
 the global config ([56] was fixed after). Mixing it with the current
 script gives false "changed: added global:…" refusals. Update it before any
 system-wide replay; keep the `git.real` layout.
@@ -407,7 +407,7 @@ system-wide replay; keep the `git.real` layout.
 | git enters another repository through a child | [6] [7] [14] [24] [36] [60] [66] [77] [78] [86] [87] | covered twice: the parent's structural refusals, the child's refusal at entry |
 | the submodule content diff | [89] | **closed** (XPASS on the VM); the accepted-limitation text and the `trust` warning go |
 | a tracked include read by the `maintenance` child | [95] [123] | **stays**: same repository, same command (section 2). Joins [44] as an accepted limitation; `trust` names every file the config names in the tree. A re-check by the child was tried and reverted ([124]) |
-| an active submodule entered in-process (`submodule.active` pathspec, `grep --recurse-submodules <tree>`) | [126] | **disarmed** (2026-10-30): `core.fsmonitor=false` pinned through `GIT_CONFIG_PARAMETERS` on every git gitwary runs (`PINNED_CONFIG`, DESIGN.md "The command that writes what it then reads"); by-name activation stays hashed and refused; `GITWARY_KEEP_FSMONITOR` reopens it, with the `trust` warning |
+| an active submodule entered in-process (`submodule.active` pathspec, `grep --recurse-submodules <tree>`) | [126] | **disarmed** (2026-10-30): `core.fsmonitor=false` pinned through `GIT_CONFIG_PARAMETERS` on every git gitblocker runs (`PINNED_CONFIG`, DESIGN.md "The command that writes what it then reads"); by-name activation stays hashed and refused; `GITBLOCKER_KEEP_FSMONITOR` reopens it, with the `trust` warning |
 | tracked hooks, sh readings | [44] [71] [74] | unchanged |
 | everything else (fingerprint scope, parsers, discovery, options, remotes, FPs) | ~75 | unchanged, untouched |
 
@@ -421,7 +421,7 @@ documented the loss).
 
 ## 6. Risks and costs
 
-- **The barrier becomes a claim about git.** Today gitwary guesses the
+- **The barrier becomes a claim about git.** Today gitblocker guesses the
   *routes*; tomorrow it assumes git enters a repository *through a
   process*. Better, still a claim, and git's trend runs against it:
   `ls-files --recurse-submodules`, `grep --recurse-submodules` and `diff
@@ -442,7 +442,7 @@ documented the loss).
   in `GIT_CONFIG_PARAMETERS`, which outranks the planted config and
   reaches the in-process repository and every child alike (`PINNED_CONFIG`,
   2026-10-30; measured: the hook runs with the raw git, not through
-  gitwary). The day `status` goes in-process,
+  gitblocker). The day `status` goes in-process,
   the barrier vanishes without a test going red — unless the test exists.
   Hence (section 7, implemented): a claims test "git enters a planted
   repository through a child process" with a positive control, and a table
@@ -461,7 +461,7 @@ documented the loss).
 - **The marker's residual window**: a shell opened from a git-spawned
   editor inherits the marker for as long as that git lives: a `git` typed
   there in the judged repository skips its check, one typed in another
-  repository refuses without asking (recorded for `gitwary pending`). One
+  repository refuses without asking (recorded for `gitblocker pending`). One
   repository, a process the user started by hand: documented, not closed.
 - **IDE polling**: an IDE running `git status` every few seconds in a
   repository with a planted nested repository produces one refused child
@@ -478,7 +478,7 @@ documented the loss).
 - `conftest`: two exec paths. The scenarios are built with the real git
   **and raw children** (`GIT_EXEC_PATH` = a raw copy: `git → git.real`,
   the rest symlinked), the checks run with the **wrapped** exec path (`git
-  → gitwary.py`). On a machine where the exec path is already wrapped,
+  → gitblocker.py`). On a machine where the exec path is already wrapped,
   the raw directory is built from `git.real`.
 - `test_claims.py`: every passthrough of 3.6 prints and exits with no
   repository (oracle: `git.c`, the inventory's [options]); git enters a
@@ -501,7 +501,7 @@ documented the loss).
 - The attack corpus: unchanged in content; `test_attacks.py` runs each
   attack under both exec paths.
 - VM replay of the whole suite with the system-wide divert, after the
-  `/usr/bin/gitwary` update (4.3).
+  `/usr/bin/gitblocker` update (4.3).
 
 ## 8. Work plan
 
@@ -513,7 +513,7 @@ documented the loss).
 | 4 | verification at trust (3.7); Debian install script and `.deb` skeleton; VM update and replay | ½–1 day |
 | 5 | removal of the switch, `SWITCH_EXEMPT`, `exempt_from_switch`, `EXEMPT_FORMS`; DESIGN.md "Nested repositories" rewritten; [89] moved from accepted to fixed, [95] warning on includes in the tree; catalogue entry for this design | ½ day |
 
-Step 1 alone leaves gitwary working on an unwrapped machine exactly as
+Step 1 alone leaves gitblocker working on an unwrapped machine exactly as
 today; the removal in step 5 is the only step that requires the install.
 
 ## 9. Open questions

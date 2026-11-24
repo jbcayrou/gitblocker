@@ -1,48 +1,54 @@
 #!/usr/bin/env python3
-"""gitwary — refuses to run git on a repository whose "trusted" files have
+"""gitblocker — refuses to run git on a repository whose "trusted" files have
 changed since the user last validated them.
 
 Usage:
-  gitwary               check the current repository (exit 1 if suspect or never trusted)
-  gitwary trust         record the current state as the reference (+ backup)
-  gitwary diff          show what differs from the reference
-  gitwary restore [-y]  put the watched files of the gitdir and the tree back
-                        into the reference state (a file outside the repository
-                        is named, never written)
-  gitwary git <args>    check, then run git; honours -C/--git-dir/--work-tree;
-                        successful clone/init → automatic trust; a pure
-                        branch-tracking addition (push -u…) is accepted on its
-                        own; any other change is shown, then asked on the
-                        terminal [y/N]
-  gitwary list          registered repositories and their status
-  gitwary pending [<repo>... | -a | -c <repo>...]
-                        decisions waiting: a git run by a program with no
-                        terminal (editor, build, cron) blocks until you allow
-                        the shown state here, refuse it, or GITWARY_WAIT ends
-  gitwary forget <repo>... | --missing
-  gitwary prune         = forget --missing
-  gitwary retrust       re-validate unchanged repositories (after an upgrade)
-  gitwary exec-path [<dir>]  (re)build an exec path whose git is gitwary, for
-                        GIT_EXEC_PATH where git's own cannot be diverted (macOS,
-                        no root; default ~/.local/lib/gitwary-exec)
-  gitwary version
-  gitwary help
+  gitblocker               check the current repository (exit 1 if suspect or
+                           never trusted)
+  gitblocker trust         record the current state as the reference (+ backup)
+  gitblocker diff          show what differs from the reference
+  gitblocker restore [-y]  put the watched files of the gitdir and the tree
+                           back into the reference state (a file outside the
+                           repository is named, never written)
+  gitblocker git <args>    check, then run git; honours
+                           -C/--git-dir/--work-tree; successful clone/init →
+                           automatic trust; a pure branch-tracking addition
+                           (push -u…) is accepted on its own; any other change
+                           is shown, then asked on the terminal [y/N]
+  gitblocker list          registered repositories and their status
+  gitblocker pending [<repo>... | -a | -c <repo>...]
+                           decisions waiting: a git run by a program with no
+                           terminal (editor, build, cron) blocks until you
+                           allow the shown state here, refuse it, or
+                           GITBLOCKER_WAIT ends
+  gitblocker forget <repo>... | --missing
+  gitblocker prune         = forget --missing
+  gitblocker retrust       re-validate unchanged repositories (after an
+                           upgrade)
+  gitblocker exec-path [<dir>]
+                           (re)build an exec path whose git is gitblocker, for
+                           GIT_EXEC_PATH where git's own cannot be diverted
+                           (macOS, no root; default
+                           ~/.local/lib/gitblocker-exec)
+  gitblocker version
+  gitblocker help
 
-Alias:    alias git='gitwary git'      Wrapper: ln -s ~/bin/gitwary ~/bin/git
-System:   /usr/bin/git → gitwary, the real git diverted to /usr/bin/git.real
+Alias:    alias git='gitblocker git'  Wrapper: ln -s ~/bin/gitblocker ~/bin/git
+System:   /usr/bin/git → gitblocker, the real git diverted to /usr/bin/git.real
           (dpkg-divert; the Debian package does it, ci/build-deb.sh); a
-          `git.real` next to gitwary is used before the PATH
-Env:      GITWARY_STATE, GITWARY_REAL_GIT, GITWARY_ALLOW_REBASE_EXEC,
-          GITWARY_NO_PROMPT, GITWARY_WAIT (seconds a terminal-less git waits
-          for `gitwary pending`, 0 = never, default 60), GITWARY_NO_NOTIFY,
-          GITWARY_KEEP_FSMONITOR (do not pin core.fsmonitor=false on the git
-          gitwary runs), GITWARY_DEBUG, NO_COLOR
+          `git.real` next to gitblocker is used before the PATH
+Env:      GITBLOCKER_STATE, GITBLOCKER_REAL_GIT, GITBLOCKER_ALLOW_REBASE_EXEC,
+          GITBLOCKER_NO_PROMPT, GITBLOCKER_WAIT (seconds a terminal-less git
+          waits for `gitblocker pending`, 0 = never, default 60),
+          GITBLOCKER_NO_NOTIFY, GITBLOCKER_KEEP_FSMONITOR (do not pin
+          core.fsmonitor=false on the git gitblocker runs), GITBLOCKER_DEBUG,
+          NO_COLOR
 
 Threat model, design choices and vulnerability history: see DESIGN.md.
 """
 from __future__ import annotations
 
-# Only what every command needs: each `gitwary git …` pays these imports
+# Only what every command needs: each `gitblocker git …` pays these imports
 # (about 12 ms of the 45 ms overhead before this trim). `subprocess`, `shutil`,
 # `difflib`, `termios`, `fcntl` and `dataclasses` are imported where used —
 # trust, restore, pending, a prompt — never on the check-then-exec path.
@@ -58,30 +64,30 @@ from collections.abc import Callable, Iterable, Iterator
 from functools import cached_property
 from pathlib import Path
 
-VERSION = "0.1.0"    # `gitwary version`; the package's (ci/build-deb.sh reads this line)
+VERSION = "0.1.0"    # `gitblocker version`; the package's (ci/build-deb.sh reads this line)
 FORMAT_VERSION = 4   # 4: symlink hashes include the target's content
 
 
 def real_git() -> str:
-    """The git to run: `GITWARY_REAL_GIT`; else a `git.real` next to the path
-    gitwary was invoked by (system-wide install: `/usr/bin/git` → gitwary,
+    """The git to run: `GITBLOCKER_REAL_GIT`; else a `git.real` next to the path
+    gitblocker was invoked by (system-wide install: `/usr/bin/git` → gitblocker,
     the real git diverted to `/usr/bin/git.real`; an environment variable
     would not reach cron, systemd or a GUI); else the first `git` of the PATH
-    that is not gitwary itself (the `~/bin/git` symlink deployment puts
-    gitwary ahead of it). The sibling wins over the PATH on purpose: when
+    that is not gitblocker itself (the `~/bin/git` symlink deployment puts
+    gitblocker ahead of it). The sibling wins over the PATH on purpose: when
     `/usr/bin/git` was diverted, the git the user would have run is
     `/usr/bin/git.real`, not another one elsewhere in the PATH. The former
     default `/usr/bin/git` silently ran another git than the user's (Apple's
     instead of Homebrew's on a Mac), with another system config."""
     me = Path(__file__).resolve()
-    if os.environ.get("GITWARY_REAL_GIT"):
-        v = os.environ["GITWARY_REAL_GIT"]
+    if os.environ.get("GITBLOCKER_REAL_GIT"):
+        v = os.environ["GITBLOCKER_REAL_GIT"]
         try:
             looped = Path(v).resolve() == me
         except OSError:
             looped = False
-        if looped:          # `<exec-path>/git` after the diversion: gitwary would exec itself for ever
-            raise Refuse(f"GITWARY_REAL_GIT names gitwary itself: {v}")
+        if looped:          # `<exec-path>/git` after the diversion: gitblocker would exec itself for ever
+            raise Refuse(f"GITBLOCKER_REAL_GIT names gitblocker itself: {v}")
         return v
 
     def usable(cand: Path) -> bool:
@@ -92,8 +98,8 @@ def real_git() -> str:
 
     # With a shebang script the kernel passes the path it found in the PATH
     # (`/usr/bin/git`), so argv[0] names the invoked link; __file__ resolved
-    # names the real file (`/usr/bin/gitwary`). A bare argv[0] (`python3
-    # gitwary.py`) has no directory: never the cwd, which may be the volume.
+    # names the real file (`/usr/bin/gitblocker`). A bare argv[0] (`python3
+    # gitblocker.py`) has no directory: never the cwd, which may be the volume.
     invoked = Path(sys.argv[0]).parent
     for d in dict.fromkeys([invoked, me.parent] if invoked != Path() else [me.parent]):
         cand = d / "git.real"
@@ -103,8 +109,8 @@ def real_git() -> str:
         cand = Path(d or ".") / "git"
         if usable(cand):
             return str(cand)
-    raise Refuse("no git found: none in the PATH other than gitwary itself, no `git.real` "
-                 "next to gitwary — set GITWARY_REAL_GIT")
+    raise Refuse("no git found: none in the PATH other than gitblocker itself, no `git.real` "
+                 "next to gitblocker — set GITBLOCKER_REAL_GIT")
 
 
 PREFIX_MARK = "%(prefix)/"
@@ -116,7 +122,7 @@ def git_prefix() -> str:
     (interpolate_path → system_path): its installation prefix, compiled in
     or found at runtime from the binary — not GIT_EXEC_PATH, which does not
     move it. Asked of the real git, the one way to know it, and the only
-    thing gitwary ever runs git to learn: a constant of the binary, never
+    thing gitblocker ever runs git to learn: a constant of the binary, never
     anything about a repository. From `/` (no repository discovered), the
     environment stripped of every GIT_* variable, no system or user config
     (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL=/dev/null), no pager: `git
@@ -141,24 +147,24 @@ def git_prefix() -> str:
                      "config value cannot be resolved: spell the path out")
     return _PREFIX[0]
 def state_dir() -> Path:
-    """Where the trust states live: `GITWARY_STATE`, else `$XDG_STATE_HOME/gitwary`,
-    else `~/.local/state/gitwary`. XDG_STATE_HOME is the specified home for
+    """Where the trust states live: `GITBLOCKER_STATE`, else `$XDG_STATE_HOME/gitblocker`,
+    else `~/.local/state/gitblocker`. XDG_STATE_HOME is the specified home for
     per-machine, non-portable state (the manifests are bound to this host's
     absolute paths and regenerated by `trust`); the spec says a relative value
     is invalid and must be ignored. Never inside a mounted volume: this is
     where the reference is, and the environment is the user's, not the
     sandbox's."""
-    explicit = os.environ.get("GITWARY_STATE")
+    explicit = os.environ.get("GITBLOCKER_STATE")
     if explicit:
         return Path(explicit)
     xdg = os.environ.get("XDG_STATE_HOME", "")
     if xdg.startswith("/"):
-        return Path(xdg) / "gitwary"
-    return Path.home() / ".local/state/gitwary"
+        return Path(xdg) / "gitblocker"
+    return Path.home() / ".local/state/gitblocker"
 
 
 STATE = state_dir()
-WAIT_DEFAULT = 60.0      # seconds a git without a controlling terminal waits for `gitwary pending`
+WAIT_DEFAULT = 60.0      # seconds a git without a controlling terminal waits for `gitblocker pending`
 WAIT_POLL = 0.5
 NOTIFY_COOLDOWN = 600    # one desktop notification per repository per 10 minutes
 NOTIFY_SEND = "/usr/bin/notify-send"     # absolute: a PATH entry may live in the volume
@@ -167,11 +173,11 @@ INCLUDE_DEPTH = 10      # git: MAX_INCLUDE_DEPTH = 10
 # No walk of the work tree looking for nested `.git`: git opens a nested
 # repository through a gitlink — of the index, read at every command
 # (`index_gitlinks`, sparse directories included [87]), or brought by the
-# command from a tree, which the child git that enters it — gitwary, at
+# command from a tree, which the child git that enters it — gitblocker, at
 # the exec path — refuses as never trusted ([66], [86], [89]; DESIGN-exec-path.md) —
 # and the `git add -A` that creates an index gitlink executes nothing by itself (tests/nested_git_is_a_threat.sh,
 # test_first_add_does_not_execute). The command that FOLLOWS the `add` is
-# refused. A walk (`GITWARY_SCAN_TREE`, removed 2026-10-18) only closed the
+# refused. A walk (`GITBLOCKER_SCAN_TREE`, removed 2026-10-18) only closed the
 # window between that `add` and the next wrapped command — a window only a
 # git outside the wrapper can exploit, which is out of scope by design — for
 # +0.2 s per command on the Linux kernel. See DESIGN.md, "Nested repositories".
@@ -268,10 +274,10 @@ class Style:
 
 
 STYLE = Style(sys.stderr.isatty() and not os.environ.get("NO_COLOR"))
-# Where gitwary's own output goes. stderr by default: in exec mode stdout
+# Where gitblocker's own output goes. stderr by default: in exec mode stdout
 # belongs to git, and a refusal is a diagnostic. The management commands
 # (trust, diff, restore, list, forget, prune, retrust) switch it to stdout,
-# so that `gitwary list | grep` works; warnings and errors stay on stderr.
+# so that `gitblocker list | grep` works; warnings and errors stay on stderr.
 OUT = sys.stderr
 
 
@@ -294,7 +300,7 @@ _SGR = re.compile(r"\x1b\[(?:0|1|3[1236])?m")
 def san(s: object) -> str:
     """Neutralize control characters in text about to be displayed.
 
-    The SGR sequences gitwary itself emits (reset, bold, four foreground
+    The SGR sequences gitblocker itself emits (reset, bold, four foreground
     colours) are kept: they can neither clear the screen, nor move the cursor,
     nor hide text — an attacker who colours a file name gains nothing. Any
     other SGR (conceal, background colours, 256/true colour) is neutralized:
@@ -320,7 +326,7 @@ def err(msg: str) -> None:
 
 
 def _tag(color, mark: str, msg: str, stream=None) -> None:
-    print(f"{color(STYLE.bold(mark + ' gitwary:'))} {san(msg)}", file=stream or OUT)
+    print(f"{color(STYLE.bold(mark + ' gitblocker:'))} {san(msg)}", file=stream or OUT)
 
 
 def info(msg: str) -> None:
@@ -346,7 +352,7 @@ def rule() -> None:
 # ------------------------------------------------------------ config parser
 # A character-by-character port of git's config.c (git_parse_source,
 # get_base_var, get_extended_base_var, get_value, parse_value), so that what
-# gitwary reads is what git reads. The previous regex-and-split parser
+# gitblocker reads is what git reads. The previous regex-and-split parser
 # diverged on a UTF-8 BOM, a `\` ending a comment line, a `\` at EOF,
 # internal whitespace (kept as is by git) and on the characters git's isspace
 # does not know (\v, \f, NBSP): each one hid a `core.hooksPath`. [46]
@@ -484,11 +490,11 @@ def _parse_section(src: _Src) -> str | None:
 
 def _parse_config_text(text: str, where: str, reading: str = "both") -> list[tuple[str, str, str]]:
     """git_parse_source. A line git rejects makes git die before running
-    anything: gitwary refuses too, rather than guess what follows.
+    anything: gitblocker refuses too, rather than guess what follows.
     `reading`: a value git < 2.45 and git ≥ 2.45 read differently
     (_parse_value) is two entries, the newer reading then the older one (a
     _Before245): every reader of the list sees what either git sees,
-    whichever runs, and gitwary never asks which. "new" and "old" keep
+    whichever runs, and gitblocker never asks which. "new" and "old" keep
     one, for the parity tests. `core.hooksPath = my<TAB>hooks` in the
     user's own config was watched as `my<TAB>hooks` while git 2.39 ran the
     hooks of `my hooks`. [152]"""
@@ -546,7 +552,7 @@ def _parse_config_text(text: str, where: str, reading: str = "both") -> list[tup
 def read_file(p: Path) -> bytes:
     """The bytes of a file of the repository that git reads (config, gitfile,
     commondir, index, todo files…), never blocking. Opened O_NONBLOCK, then
-    fstat: a FIFO in place of `.git/config` blocked gitwary in read() for
+    fstat: a FIFO in place of `.git/config` blocked gitblocker in read() for
     ever — fail closed, but a denial of service that pushes the user toward
     the real git — so anything but a regular file is refused at once (a
     FIFO, a socket, a device, a symlink to one). /dev/null reads empty, as
@@ -561,7 +567,7 @@ def read_file(p: Path) -> bytes:
             if stat.S_ISCHR(st.st_mode) and st.st_rdev == os.stat(os.devnull).st_rdev:
                 return b""
             raise Refuse(f"{p} is not a regular file (a FIFO, a socket or a device): git "
-                         f"would read it, gitwary cannot check it without blocking")
+                         f"would read it, gitblocker cannot check it without blocking")
         chunks = []
         while chunk := os.read(fd, 1 << 16):
             chunks.append(chunk)
@@ -740,7 +746,7 @@ class Repo:
 
 # --------------------------------------------------------------- discovery
 # Port of git's repository discovery (setup.c, path.c), the one part of
-# gitwary that must agree with git *before* anything is read: a
+# gitblocker that must agree with git *before* anything is read: a
 # divergence here checks a repository git does not open, or lets through
 # one it does ([23] [28] [47] [49] [53] [54]). Each function names the git
 # function it mirrors. The ports were written against git 2.50 and are
@@ -786,7 +792,7 @@ def env_common_dir() -> Path | None:
     discovery (`is_git_directory` looks for `objects` and `refs` there, so a
     lone `HEAD` makes any directory a gitdir) and once the repository is open
     (`config`, `hooks/`, `info/`, `objects/`, `worktrees/` come from it; the
-    `commondir` file is ignored). gitwary read the gitdir's own files and
+    `commondir` file is ignored). gitblocker read the gitdir's own files and
     fingerprinted a repository git was not using. [54]
 
     A relative value is read by git against the cwd during discovery, then
@@ -797,7 +803,7 @@ def env_common_dir() -> Path | None:
     if v is None:
         return None
     if not v.startswith("/"):
-        raise Refuse(f"GIT_COMMON_DIR={v!r}: gitwary needs an absolute path (git reads a "
+        raise Refuse(f"GIT_COMMON_DIR={v!r}: gitblocker needs an absolute path (git reads a "
                      f"relative one against two different directories in one run)")
     return Path(v)
 
@@ -831,12 +837,12 @@ def find_root(cwd: Path) -> Path | None:
 
     Same order as git at each level: `<d>/.git` first, then "is `<d>` itself a
     gitdir?". That second test was missing: a bare gitdir planted in `src/`
-    was discovered by git before the parent's `.git`, which gitwary checked
+    was discovered by git before the parent's `.git`, which gitblocker checked
     instead. [23] Bare repositories are not handled: refuse."""
     if os.environ.get("GIT_DIR"):
         # --git-dir / GIT_DIR: git discovers nothing, the tree is GIT_WORK_TREE,
         # else core.worktree (relative to the gitdir), else the cwd. Always
-        # taking the cwd made gitwary check all of $HOME. [28]
+        # taking the cwd made gitblocker check all of $HOME. [28]
         gd = Path(os.environ["GIT_DIR"])
         # A GIT_DIR that is no git directory (missing, or a directory without
         # a valid HEAD, objects and refs): setup_explicit_git_dir leaves git
@@ -852,7 +858,7 @@ def find_root(cwd: Path) -> Path | None:
         wt = _core_worktree(gd, env or gd, env is not None or (gd / "commondir").is_file())
         return cwd.resolve() if wt is None else wt
     d = cwd.resolve()
-    # Where git stops ascending, gitwary stops too, or it checks — and refuses
+    # Where git stops ascending, gitblocker stops too, or it checks — and refuses
     # on — a repository git would not open (seen with a tmpfs mounted inside
     # a modified repository, and with GIT_CEILING_DIRECTORIES). Port of
     # setup.c: the ceiling directories are the longest one that is a proper
@@ -879,8 +885,8 @@ def find_root(cwd: Path) -> Path | None:
             return d                  # neither file nor directory: refused later
         if is_bare_gitdir(d):
             raise Refuse(f"bare gitdir found before any .git: {d} — bare repository (not "
-                         f"handled by gitwary) or booby-trapped directory. Run the real git "
-                         f"directly (`git.real`, or the one GITWARY_REAL_GIT names) if "
+                         f"handled by gitblocker) or booby-trapped directory. Run the real git "
+                         f"directly (`git.real`, or the one GITBLOCKER_REAL_GIT names) if "
                          f"intended; {SAFE_BARE_HINT}.")
         if d.parent == d:
             return None
@@ -935,7 +941,7 @@ def _read_path_file(p: Path) -> str:
     whole content, every trailing CR/LF trimmed, nothing else — no strip(), no
     line split: `x<SPACE>`, `x<CR>y` or a second line are part of the path for
     git, which then finds no repository there and dies. Reading them more
-    leniently made gitwary check a repository git never opens. NUL: git
+    leniently made gitblocker check a repository git never opens. NUL: git
     truncates (C string), refused here. [53]"""
     buf = read_file(p)
     if b"\0" in buf:
@@ -1507,9 +1513,9 @@ def _check_index_extensions(data: bytes, off: int, p: Path, oid_size: int) -> No
                     continue
                 raise Refuse(f"core.splitIndex not supported ({p} is a split index): run "
                              f"`git update-index --no-split-index` then `git config --unset "
-                             f"core.splitIndex` (gitwary lets exactly these two through; git "
+                             f"core.splitIndex` (gitblocker lets exactly these two through; git "
                              f"warns at the first, the second makes it stick)")
-            raise Refuse(f"{p}: index extension {sig!r} gitwary does not know; git "
+            raise Refuse(f"{p}: index extension {sig!r} gitblocker does not know; git "
                          f"requires it to read the entries (a newer git?), so their "
                          f"gitlinks cannot be checked")
         off += 8 + size
@@ -1549,9 +1555,9 @@ def nested_repo_hint(n: Path) -> str:
     return (f"nested repository: {n} — a gitlink for this directory exists in the index "
             f"(a plain `git add -A` creates one), git will execute its config. If it is "
             f"your own vendored repository: inspect {n}/config and {n}/hooks, declare it "
-            f"in .gitmodules, run `git submodule absorbgitdirs -- {d}` (gitwary lets it "
+            f"in .gitmodules, run `git submodule absorbgitdirs -- {d}` (gitblocker lets it "
             f"through, with core.fsmonitor pinned off: the raw git runs the nested "
-            f"repository's fsmonitor), then `gitwary trust`. Otherwise delete {d}/.git "
+            f"repository's fsmonitor), then `gitblocker trust`. Otherwise delete {d}/.git "
             f"first, then `git rm --cached {d}`.")
 
 
@@ -1560,9 +1566,9 @@ def _absorbs_nested(rest: list[str] | None) -> bool:
     by the nested-repository refusal: it moves the nested gitdir under
     `.git/modules/` and runs nothing of it but the in-process fsmonitor,
     which the pin disarms (PINNED_CONFIG; held to git in test_claims.py).
-    Not when the pin is off (GITWARY_KEEP_FSMONITOR). The refusal named
+    Not when the pin is off (GITBLOCKER_KEEP_FSMONITOR). The refusal named
     this command and refused it. [149]"""
-    if not rest or rest[:2] != ["submodule", "absorbgitdirs"] or _env_bool("GITWARY_KEEP_FSMONITOR"):
+    if not rest or rest[:2] != ["submodule", "absorbgitdirs"] or _env_bool("GITBLOCKER_KEEP_FSMONITOR"):
         return False
     return all(a in ("-q", "--quiet", "--") or not a.startswith("-") for a in rest[2:])
 
@@ -1744,7 +1750,7 @@ def _read_todo(p: Path) -> None:
         raise Refuse(
             f"`exec` line in {p}: git would run it on the next "
             f"`--continue` / `--skip`:\n{shown}\n  If this rebase is really "
-            f"yours, retry with GITWARY_ALLOW_REBASE_EXEC=1.")
+            f"yours, retry with GITBLOCKER_ALLOW_REBASE_EXEC=1.")
 
 
 def _read_strategy_file(p: Path) -> None:
@@ -1826,7 +1832,7 @@ def _resumes_sequence(rest: list[str]) -> bool:
 
 def check_volatile_readers(repo: Repo) -> None:
     """Each file of VOLATILE_READERS present under any gitdir root, read by
-    its reader; GITWARY_ALLOW_REBASE_EXEC skips them all (the user's own
+    its reader; GITBLOCKER_ALLOW_REBASE_EXEC skips them all (the user's own
     `--exec` rebase or custom strategy). In exec mode, only for a command
     that can resume a sequence, and not another linked worktree's files: a
     stopped `rebase -x 'make test'` refused `status`, `log`, `rebase
@@ -1835,7 +1841,7 @@ def check_volatile_readers(repo: Repo) -> None:
     resumed by a git started in that worktree, judged there; a submodule's
     by a child git, which a covered child judges too (main): its gitdir
     stays among the roots read here. [147]"""
-    if os.environ.get("GITWARY_ALLOW_REBASE_EXEC"):
+    if os.environ.get("GITBLOCKER_ALLOW_REBASE_EXEC"):
         return
     roots = dict.fromkeys([*gitdir_roots(repo.gitdir), *gitdir_roots(repo.common)])
     if _COMMAND is not None:
@@ -1860,7 +1866,7 @@ def _check_strategy(p: Path, name: str) -> None:
             f"non-builtin merge strategy {name!r} in {p}: git would exec "
             f"`git-merge-{name}` on the next `--continue`. Check "
             f"this file; if this operation is really yours, retry with "
-            f"GITWARY_ALLOW_REBASE_EXEC=1.")
+            f"GITBLOCKER_ALLOW_REBASE_EXEC=1.")
 
 
 def check_indexes(repo: Repo) -> None:
@@ -1999,7 +2005,7 @@ def walk_all(base: Path, repo: Repo | None = None) -> Iterator[Path]:
     = ..`, `~`): there git runs `<hooksPath>/<hook>` and nothing of the
     tree, so depth 1. Walked recursively, such a directory fingerprinted the
     whole volume (the work tree, the gitdir without its volatile exclusions,
-    gitwary's own state: every commit, then every `trust`, alerted). The
+    gitblocker's own state: every commit, then every `trust`, alerted). The
     state directory is never entered (a template directory adds its `hooks/`
     as a ref of its own, config_refs). [65]"""
     if base.is_symlink() or base.is_file():
@@ -2174,7 +2180,7 @@ def _git_maybe_bool(value: str) -> bool | None:
     return int(d, base) != 0
 
 
-# Config gitwary pins on every git it runs, through GIT_CONFIG_PARAMETERS:
+# Config gitblocker pins on every git it runs, through GIT_CONFIG_PARAMETERS:
 # what git reads first for any repository the process opens — a submodule
 # entered in-process included — and hands to its children. A closed list,
 # each entry with its proof in tests/test_claims.py: `core.fsmonitor` is
@@ -2189,13 +2195,13 @@ PINNED_CONFIG = (("core.fsmonitor", "false"),)
 
 
 def pin_config_env() -> None:
-    """Append PINNED_CONFIG to GIT_CONFIG_PARAMETERS in gitwary's own
+    """Append PINNED_CONFIG to GIT_CONFIG_PARAMETERS in gitblocker's own
     environment, right before the real git is run (never before the scan:
     the scan reads the user's environment, [48]). git's format, appended
     with a blank as git_config_push_parameter appends a `-c`. Skipped under
-    GITWARY_KEEP_FSMONITOR: the user keeps a hook or daemon the pin would
+    GITBLOCKER_KEEP_FSMONITOR: the user keeps a hook or daemon the pin would
     disable, and the hazard the pin closes."""
-    if _env_bool("GITWARY_KEEP_FSMONITOR"):
+    if _env_bool("GITBLOCKER_KEEP_FSMONITOR"):
         return
     words = [f"{_sq_quote(k)}={_sq_quote(v)}" for k, v in PINNED_CONFIG]
     have = os.environ.get("GIT_CONFIG_PARAMETERS", "")
@@ -2290,7 +2296,7 @@ def iter_command_config(cli: list[str] | None = None, cli_env: list[str] | None 
 
 SAFE_BARE_HINT = ("`git config --global safe.bareRepository explicit`: git then refuses "
                   "to discover a bare gitdir planted in a subdirectory [23], even from a "
-                  "tool that does not go through gitwary")
+                  "tool that does not go through gitblocker")
 
 
 def safe_bare_explicit() -> bool:
@@ -2403,11 +2409,11 @@ class ConfigScan:
         # file — and `restore` deleted there. [25]
         if p.is_dir() and not allow_dir:
             return
-        # The config naming gitwary's own state: the reference would watch
+        # The config naming gitblocker's own state: the reference would watch
         # itself (every `trust` rewrites it). Structurally abnormal. [65]
         state = STATE.resolve()
         if any(q == state or state in q.parents for q in (p, literal)):
-            raise Refuse(f"path referenced by the config lies in gitwary's state "
+            raise Refuse(f"path referenced by the config lies in gitblocker's state "
                          f"directory ({state}): {literal}")
         # A referenced path reached through a symlink in the tree is refused:
         # resolving the link would pull its target (e.g. $HOME) into the
@@ -2506,7 +2512,7 @@ class ConfigScan:
                 # then searches the PATH, a broken setup anyway. [59]
                 raise Refuse(f"{section}.{key} = {value!r} resolves to the root of the "
                              f"work tree ({p}): every file at the top of the tree would be "
-                             f"a hook, gitwary cannot watch that. Move the hooks to a "
+                             f"a hook, gitblocker cannot watch that. Move the hooks to a "
                              f"subdirectory (e.g. `.githooks`, then `git config "
                              f"{section}.{key} .githooks`) and retry.")
             self.add(literal, p, allow_dir=True)
@@ -2550,7 +2556,7 @@ class ConfigScan:
             # A boolean or a number on a key git reads as one: names
             # nothing. core.fsmonitor among them (lookup_fsmonitor_settings:
             # a boolean is the built-in daemon or nothing, only a
-            # non-boolean is a hook path): the pin gitwary sets
+            # non-boolean is a hook path): the pin gitblocker sets
             # (PINNED_CONFIG) reaches every child's environment, and a file
             # named `false` at the root must not become a watched path. [129]
             return
@@ -3019,13 +3025,13 @@ _SH_VAR = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\
 
 def _sh_readings(value: str) -> set[str]:
     """Two readings of `value` that, between them, contain every path sh can
-    build from it without running anything gitwary cannot know [58]:
+    build from it without running anything gitblocker cannot know [58]:
     - `word`: each `${NAME<op>WORD}` gives its WORD (the default, the
       alternate…) and each command substitution gives `.` — `$(pwd)`,
       `` `pwd` ``, `$(dirname …)` glued before `/x` designate the top of
-      the tree where git runs the command, and so does a variable gitwary's
+      the tree where git runs the command, and so does a variable gitblocker's
       environment does not hold (`x=$(pwd); $x/t.sh`, an alias's `$1`);
-    - `var`: each `${NAME…}` gives $NAME's value in gitwary's environment
+    - `var`: each `${NAME…}` gives $NAME's value in gitblocker's environment
       (git's), a substitution gives nothing (`$(cmd)/x` = `/x`).
     A superset, like the condition-blind reading of includeIf: hashing a
     file the shell would not reach costs a hash, missing one let a planted
@@ -3058,7 +3064,7 @@ def _value_tokens(value: str) -> set[str]:
     are the top of the tree (where a `!` alias runs) [37]; `${X:-./t.sh}`,
     `${X:+…}`, `$(pwd)/t.sh`, `` `pwd`/t.sh `` were left as text that names
     no file [58]; other variables come from the environment git inherits
-    from gitwary. Candidates, not an interpretation of sh: a path built
+    from gitblocker. Candidates, not an interpretation of sh: a path built
     through `cd dir && ./x` or an unset variable glued in a word is an
     accepted limitation ([71], [74], DESIGN.md "Known limitations"); do not
     grow the readings for such variants."""
@@ -3222,7 +3228,7 @@ def _hard_link(p: Path, st: os.stat_result, link_zones: tuple[Path, ...]) -> Non
         raise Refuse(f"hard link in a watched zone: {p} has {st.st_nlink} names, and git "
                      f"writes files of the gitdir by name (COMMIT_EDITMSG, a reflog…), which "
                      f"would rewrite it. Replace it by a copy (copy it aside, move the copy "
-                     f"over it), inspect it, then `gitwary trust`.")
+                     f"over it), inspect it, then `gitblocker trust`.")
 
 
 def _mk(scope: str, rel: str, p: Path, link_zones: tuple[Path, ...] = ()) -> Entry | None:
@@ -3443,7 +3449,7 @@ def check_links_into_gitdir(repo: Repo, man: dict[tuple[str, str], Entry]) -> No
             raise Refuse(f"link into the gitdir: {p} is {real}, and git writes files of the "
                          f"gitdir by name (COMMIT_EDITMSG, a reflog…), which would rewrite it. "
                          f"Replace it by a copy (copy it aside, move the copy over it), inspect "
-                         f"it, then `gitwary trust`.")
+                         f"it, then `gitblocker trust`.")
         if st.st_nlink > 1 and st.st_dev in devs:
             linked[(st.st_dev, st.st_ino)] = str(p)
     if not linked:
@@ -3466,7 +3472,7 @@ def check_links_into_gitdir(repo: Repo, man: dict[tuple[str, str], Entry]) -> No
                     raise Refuse(f"hard link into the gitdir: {other} is also {d / name}, and git "
                                  f"writes files of the gitdir by name (COMMIT_EDITMSG, a reflog…), "
                                  f"which would rewrite it. Replace it by a copy (copy it aside, move "
-                                 f"the copy over it), inspect it, then `gitwary trust`.")
+                                 f"the copy over it), inspect it, then `gitblocker trust`.")
 
 
 def inspect(repo: Repo) -> Inspection:
@@ -3567,7 +3573,7 @@ def save_trust(repo: Repo, refs: list[tuple[str, Path]],
         _copy_entry(src, dst)
         # The copy must be the file the blessed manifest describes: between
         # the diff and the answer (seconds on the tty, minutes through
-        # `gitwary pending`) a still-active sandbox may have rewritten it.
+        # `gitblocker pending`) a still-active sandbox may have rewritten it.
         # The manifest would refuse that file at the next check, but
         # `restore` would have put the attacker's copy back. Verified on the
         # copy, in STATE, out of the sandbox's reach. A symlink's copy only
@@ -3604,7 +3610,7 @@ def _copy_entry(src: Path, dst: Path) -> None:
 # ------------------------------------------------------------------ pending
 # A git run by a program without a controlling terminal (editor, build tool,
 # cron) cannot be asked and its stderr is swallowed. It records what it saw in
-# `<key>.pending` and waits for the user to decide from `gitwary pending`.
+# `<key>.pending` and waits for the user to decide from `gitblocker pending`.
 # The decision channel is the reference itself: allowing = saving the reviewed
 # state, which the waiter recognises as equal to its own; refusing = removing
 # the record. A waiter whose state differs from what was blessed refuses.
@@ -3693,7 +3699,7 @@ def _proc_info(pid: int) -> tuple[int, str, str] | None:
 
 def caller_chain(limit: int = 5) -> list[dict]:
     """The program that ran git, and its ancestors: [{pid, name, args}] from
-    gitwary's parent upwards. Informational, sanitized; never trusted for a
+    gitblocker's parent upwards. Informational, sanitized; never trusted for a
     decision (it only says who to look at)."""
     out: list[dict] = []
     pid = os.getppid()
@@ -3713,12 +3719,12 @@ def notify_pending(label, text: str) -> None:
     """One desktop notification: Linux `notify-send`, macOS `osascript`. Text
     passed as arguments, never interpolated; absolute binaries; any failure
     is ignored — a notification must never change the outcome or hang git."""
-    if os.environ.get("GITWARY_NO_NOTIFY"):
+    if os.environ.get("GITBLOCKER_NO_NOTIFY"):
         return
-    title = "gitwary: decision pending"
+    title = "gitblocker: decision pending"
     body = san(f"{label}: {text}")[:200]
     if Path(NOTIFY_SEND).is_file():
-        cmd = [NOTIFY_SEND, "--app-name", "gitwary", "--urgency", "critical", title, body]
+        cmd = [NOTIFY_SEND, "--app-name", "gitblocker", "--urgency", "critical", title, body]
     elif Path(OSASCRIPT).is_file():
         cmd = [OSASCRIPT, "-e", "on run argv",
                "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
@@ -3768,8 +3774,8 @@ def record_pending(key: Path, kind: str, label, message: str,
 
     update_pending(key, fn)
     if notify and notify_user:
-        notify_pending(titled(label, gitdir), "git is waiting for your decision. In a terminal: gitwary pending"
-                       if kind == "changed" else f"{message} — in a terminal: gitwary pending")
+        notify_pending(titled(label, gitdir), "git is waiting for your decision. In a terminal: gitblocker pending"
+                       if kind == "changed" else f"{message} — in a terminal: gitblocker pending")
 
 
 def _drop_waiter(key: Path, pid: int) -> None:
@@ -3782,7 +3788,7 @@ def _drop_waiter(key: Path, pid: int) -> None:
 
 
 def wait_seconds() -> float:
-    v = os.environ.get("GITWARY_WAIT")
+    v = os.environ.get("GITBLOCKER_WAIT")
     if v is None or v == "":
         return WAIT_DEFAULT
     try:
@@ -3790,14 +3796,14 @@ def wait_seconds() -> float:
         if f < 0:
             raise ValueError
     except ValueError:
-        raise Refuse(f"GITWARY_WAIT must be a number of seconds: {v!r}") from None
+        raise Refuse(f"GITBLOCKER_WAIT must be a number of seconds: {v!r}") from None
     return f
 
 
 def wait_for_decision(repo: Repo, key: Path, new: dict, refs: list[tuple[str, Path]]) -> str:
     """Record the pending state, then block until the reference equals `new`
-    ("allowed"), the record disappears ("refused") or GITWARY_WAIT elapses
-    ("timeout", the record stays for `gitwary pending`)."""
+    ("allowed"), the record disappears ("refused") or GITBLOCKER_WAIT elapses
+    ("timeout", the record stays for `gitblocker pending`)."""
     timeout = wait_seconds()
     me = {"pid": os.getpid(), "since": time.time(), "caller": caller_chain()} if timeout else None
     record_pending(key, "changed", repo.label, "has changed since the last trust", new, refs, me,
@@ -3898,12 +3904,12 @@ def restore(repo: Repo, key: Path, old: dict, new: dict, yes: bool,
             trusted_refs: list[tuple[str, Path]]) -> None:
     bak = Path(str(key) + ".d")
     if not bak.is_dir():
-        raise Refuse(f"no backup for {repo.title} (run 'gitwary trust' again when the repository is clean)")
+        raise Refuse(f"no backup for {repo.title} (run 'gitblocker trust' again when the repository is clean)")
     plan = [(("delete" if a == "added" else "restore"), k) for a, k in changes(old, new)]
     # A deletion may only target the inside of the gitdir or of a root that the
     # **trusted** config designated. Without this, an `ext:` path that appeared
     # after the trust (hooksPath turned into a symlink to $HOME, say) made
-    # gitwary delete files outside the repository — found in review. Such a
+    # gitblocker delete files outside the repository — found in review. Such a
     # file is left in place and named, and the rest is restored: it is only
     # watched because the planted config names it (`include.path = ../x`),
     # and once that config is back it is an ordinary file, in the tree or
@@ -3913,7 +3919,7 @@ def restore(repo: Repo, key: Path, old: dict, new: dict, yes: bool,
     allowed = [repo.gitdir, repo.common] + [p for _, p in trusted_refs]
     kept = []
     # Outside the repository (scope `ext`: `../shared-hooks`, a program under
-    # $HOME named by the config) gitwary writes nothing and deletes nothing,
+    # $HOME named by the config) gitblocker writes nothing and deletes nothing,
     # and keeps no copy in the state directory. Two of its own flaws were
     # restore acting there — neighbouring files deleted [25], a rotated ssh
     # key overwritten with the old one [56] — for files it only watches
@@ -3923,7 +3929,7 @@ def restore(repo: Repo, key: Path, old: dict, new: dict, yes: bool,
             plan.remove((action, (scope, path)))
             kept.append((scope, path))
             warn(f"{_label(scope, path)} is outside the repository: left in place, neither "
-                 f"restored nor deleted by gitwary. Inspect it by hand.")
+                 f"restored nor deleted by gitblocker. Inspect it by hand.")
     for action, (scope, path) in list(plan):
         if action != "delete":
             continue
@@ -3940,7 +3946,7 @@ def restore(repo: Repo, key: Path, old: dict, new: dict, yes: bool,
             plan.remove((action, (scope, path)))
             kept.append((scope, path))
             warn(f"{_label(scope, path)}: no backup copy: left as is. Inspect it by hand, "
-                 f"then `gitwary trust`.")
+                 f"then `gitblocker trust`.")
     if not plan:
         if kept:
             raise Refuse("nothing else to restore")
@@ -3979,7 +3985,7 @@ def restore(repo: Repo, key: Path, old: dict, new: dict, yes: bool,
     if manifest(repo, config_refs(repo).refs) == old:
         info(f"{len(plan)} file(s) restored, {repo.title} matches the trusted state again")
     else:
-        warn("restore done, but the fingerprint still differs — check with 'gitwary diff'")
+        warn("restore done, but the fingerprint still differs — check with 'gitblocker diff'")
 
 
 # --------------------------------------------------------- state management
@@ -4086,7 +4092,7 @@ def forget_key(key: Path) -> None:
 
 def cmd_forget(args: list[str]) -> None:
     if not args:
-        raise Refuse("usage: gitwary forget <repo>... | --missing")
+        raise Refuse("usage: gitblocker forget <repo>... | --missing")
     if args[0] == "--missing":
         n = 0
         for key, root, gitdir, st in entries():
@@ -4202,13 +4208,13 @@ def review_pending(key: Path, d: dict) -> None:
     _show_waiters(d)
     if kind != "changed":
         err(f"  {san(str(d.get('message', '')))}")
-        hint("Inspect, then:  gitwary trust  (clears this record)   or:  gitwary pending -c <repo>")
+        hint("Inspect, then:  gitblocker trust  (clears this record)   or:  gitblocker pending -c <repo>")
         return
     insp = inspect(open_record(Path(str(d["root"])), gitdir))
     repo, refs, live = insp.repo, insp.refs, insp.new
     old = load_manifest(key)
     if old is None or not old.current:
-        raise Refuse(f"repository never trusted: {label} (gitwary trust after inspection)")
+        raise Refuse(f"repository never trusted: {label} (gitblocker trust after inspection)")
     if old.entries == live:
         clear_pending(key)
         info(f"back to the reference, nothing to decide: {label}")
@@ -4220,12 +4226,12 @@ def review_pending(key: Path, d: dict) -> None:
         rule()
         show_changes(repo, old.entries, live, key)
         rule()
-        raise Refuse("run `gitwary pending` from a terminal to decide")
+        raise Refuse("run `gitblocker pending` from a terminal to decide")
     if review(repo, key, old.entries, live, refs,
               "Allow: record this state and let the waiting git run? [y/N] "):
         return
     clear_pending(key)
-    warn(f"refused: the waiting git is not run; the record is cleared. If malicious:  gitwary restore")
+    warn(f"refused: the waiting git is not run; the record is cleared. If malicious:  gitblocker restore")
 
 
 def cmd_pending(args: list[str]) -> None:
@@ -4233,7 +4239,7 @@ def cmd_pending(args: list[str]) -> None:
     `pending -c <repo>…`: clear without deciding."""
     if args and args[0] == "-c":
         if len(args) < 2:
-            raise Refuse("usage: gitwary pending -c <repo>...")
+            raise Refuse("usage: gitblocker pending -c <repo>...")
         for a in args[1:]:
             keys = [k for k in records_at(Path(a).resolve()) if pending_path(k).is_file()]
             if not keys:
@@ -4254,7 +4260,7 @@ def cmd_pending(args: list[str]) -> None:
             kind = str(d.get("kind", "?"))
             err(f"{colors.get(kind, str)(f'{kind:<11}')} {_age(d.get('created')):>6}  "
                 f"{n} waiting  {san(titled(d['root'], d.get('gitdir')))}")
-        hint("gitwary pending <repo>   to see the diff and decide     -a: all")
+        hint("gitblocker pending <repo>   to see the diff and decide     -a: all")
         return
     if args == ["-a"]:
         targets = records
@@ -4272,13 +4278,13 @@ def cmd_pending(args: list[str]) -> None:
 # -------------------------------------------------------- exec mode (git …)
 # git.c handle_options(): options taking a separate argument, options also
 # accepted as `--opt=value`, and flags. Anything else is refused: an unknown
-# option may take an argument, and guessing wrong made gitwary take
+# option may take an argument, and guessing wrong made gitblocker take
 # `--config-env`'s argument for the subcommand, ignore the `-C` that followed
 # and check another directory than git's. git refuses unknown options too. [40]
 # `--super-prefix` is git ≤ 2.39's (Debian 12): its submodule recursion
 # passes it to the child it runs in each submodule (`clone
 # --recurse-submodules`, `submodule foreach --recursive`, `absorbgitdirs`),
-# and that child is gitwary; it names a prefix for the paths git prints,
+# and that child is gitblocker; it names a prefix for the paths git prints,
 # never a repository. A newer git dies on it by itself.
 GLOBAL_WITH_ARG = {"-c", "--config-env", "--namespace", "-C", "--git-dir", "--work-tree",
                    "--attr-source", "--shallow-file", "--super-prefix"}
@@ -4316,7 +4322,7 @@ class GlobalOpts:
 def split_global_options(args: list[str], cwd: Path) -> GlobalOpts:
     """Interpret git's global options as git would, without side effects.
     `--work-tree` does **not** change gitdir discovery — git does it from the
-    cwd (or GIT_DIR); moving there made gitwary check another repository
+    cwd (or GIT_DIR); moving there made gitblocker check another repository
     while git executed the config of the cwd's repository [18]. It does
     however designate the tree to check when `--git-dir` is given [28].
     git applies each `-C` at once but only stores `--git-dir`/`--work-tree`
@@ -4333,7 +4339,7 @@ def split_global_options(args: list[str], cwd: Path) -> GlobalOpts:
             # `setenv(GIT_DIR, getcwd(), 0)` (handle_options): the cwd as it
             # is at this point (after the `-C` before it), unless a GIT_DIR is
             # already there; a `--git-dir` overwrites it, before or after.
-            # Taken for an inert flag, gitwary discovered the repository
+            # Taken for an inert flag, gitblocker discovered the repository
             # from the cwd and checked its `.git`, while git read the
             # `config` a sandbox laid out at the root of the tree. [97]
             i += 1
@@ -4369,7 +4375,7 @@ def split_global_options(args: list[str], cwd: Path) -> GlobalOpts:
         elif a in GLOBAL_STOP or not a.startswith("-"):
             break
         else:
-            raise Refuse(f"unknown git global option {a!r}: gitwary cannot tell "
+            raise Refuse(f"unknown git global option {a!r}: gitblocker cannot tell "
                          f"which repository git would use")
     return GlobalOpts(cwd, None if gitdir is None else cwd / gitdir,
                       None if worktree is None else cwd / worktree, args[i:], config, config_env)
@@ -4451,7 +4457,7 @@ def _template_dir_configured(cli: list[str], cli_env: list[str]) -> bool:
 class NewRepo:
     """What `clone` or `init` creates: `dir`, the repository's directory (the
     gitdir itself when bare); `gitdir` when `--separate-git-dir` puts it
-    elsewhere; `auto_trust`: not for a bare repository (gitwary does not
+    elsewhere; `auto_trust`: not for a bare repository (gitblocker does not
     handle those) nor for one built from a template, whose hooks nobody
     reviewed ([42] [98]). Every form sets the `new` marker: the children
     (`index-pack`, the submodule clones) run before the repository exists,
@@ -4559,7 +4565,7 @@ def parse_new_repo(args: list[str]) -> NewRepo | None:
     auto_trust = not bare
     if template == "given" or (template == "default"
                                and _template_dir_configured(o.config, o.config_env)):
-        warn("templateDir: no auto-trust, run 'gitwary trust' after inspection")
+        warn("templateDir: no auto-trust, run 'gitblocker trust' after inspection")
         auto_trust = False
     if sub == "clone":
         if not positional:
@@ -4685,9 +4691,9 @@ def check_remote_destination(repo: Repo, rest: list[str], scan: "ConfigScan") ->
         if r is not None and r[1] != repo.common and (r[1] / "config") not in watched:
             again = "push <name>" if cmd == "push" else "archive --remote=<name>"
             raise Refuse(f"`git {cmd}` to {dest}: a local repository no trusted config names "
-                         f"({r[0]}); git would run its hooks and config, which gitwary does "
+                         f"({r[0]}); git would run its hooks and config, which gitblocker does "
                          f"not watch. Make it a remote (`git remote add <name> {url}`), run "
-                         f"`gitwary trust`, then `git {again}`. [{62 if cmd == 'push' else 70}]")
+                         f"`gitblocker trust`, then `git {again}`. [{62 if cmd == 'push' else 70}]")
 
 
 def check_archive_outside_repo(rest: list[str]) -> None:
@@ -4706,7 +4712,7 @@ def check_archive_outside_repo(rest: list[str]) -> None:
     if r is not None:
         raise Refuse(f"`git archive --remote={dest}` outside any repository: {r[0]} is a "
                      f"local repository, git would run its config (tar.<format>.command), "
-                     f"which gitwary does not watch. Run it there instead: "
+                     f"which gitblocker does not watch. Run it there instead: "
                      f"`git -C {dest} archive …`. [81]")
 
 
@@ -4892,7 +4898,7 @@ def run_git(args: list[str], orig: Path, newrepo: NewRepo | None, git: str,
     if rc == 0 and newrepo.auto_trust:
         d = d.resolve()
         if preexisting:
-            warn(f"{d} already had a gitdir before '{newrepo.sub}': no auto-trust (gitwary trust after inspection)")
+            warn(f"{d} already had a gitdir before '{newrepo.sub}': no auto-trust (gitblocker trust after inspection)")
         elif (d / ".git").exists():
             # The new repository, whatever the environment designates: a
             # child's GIT_DIR is its parent's (git exports it to `submodule
@@ -5037,7 +5043,7 @@ def auto_accept(repo: Repo, key: Path, old: Manifest, new: dict) -> list[str]:
 # kind of change, and whether exactly one worktree is concerned. Both are
 # hashed — the first says where the worktree's config is, the second where
 # its tree is — so each of these commands was asked about at the next one,
-# and the new tree was "never trusted". Run by gitwary on a repository in
+# and the new tree was "never trusted". Run by gitblocker on a repository in
 # its trusted state, their own pointers are accepted (worktree_pointers);
 # written by anything else, they are shown, as before. A closed list, each
 # entry held to git (tests/test_claims.py); the subcommand is the first
@@ -5264,7 +5270,7 @@ def worktree_pointers(repo: Repo, sub: str, old: dict, new: dict) -> tuple[dict,
 
 
 def accept_worktree_pointers(repo: Repo, key: Path, sub: str) -> None:
-    """After a `git worktree <sub>` gitwary ran itself on a repository in
+    """After a `git worktree <sub>` gitblocker ran itself on a repository in
     its trusted state: when the fingerprint moved by that command's
     pointers (worktree_pointers) and at most by the branch tracking `add`
     writes (auto_accept), the state is the reference. Anything else, and
@@ -5292,7 +5298,7 @@ def ask_on_tty(question: str) -> bool:
     `$(git …)` run by a shell prompt has stderr on the terminal and stdout on
     a pipe: asking there would block every prompt redraw on a modified
     repository; the price is that `git log | head` is refused instead of
-    asked) or when GITWARY_NO_PROMPT is set."""
+    asked) or when GITBLOCKER_NO_PROMPT is set."""
     if not can_ask():
         return False
     import termios
@@ -5334,7 +5340,7 @@ def has_tty() -> bool:
 
 
 def can_ask() -> bool:
-    return (not os.environ.get("GITWARY_NO_PROMPT") and sys.stderr.isatty()
+    return (not os.environ.get("GITBLOCKER_NO_PROMPT") and sys.stderr.isatty()
             and sys.stdout.isatty() and has_tty())
 
 
@@ -5365,7 +5371,7 @@ def holder_unsettled(repo: Repo) -> str | None:
     """What the refusal of a tree nobody trusted says of the repository
     that holds its gitdir, when that one is itself not in its trusted
     state: never trusted, or changed since. The tree then takes no trust
-    (trust_holder), and "never trusted … gitwary trust" sent the user to
+    (trust_holder), and "never trusted … gitblocker trust" sent the user to
     bless it blind — after a `submodule update --init`, the question waits
     in the superproject, where the command wrote. None when the holder is
     in its trusted state: a tree it does not cover (a gitfile planted
@@ -5379,7 +5385,7 @@ def holder_unsettled(repo: Repo) -> str | None:
             return f"{holder.title}, never trusted either: inspect and trust that one"
         if old.current and inspect(holder).new != old.entries:
             return (f"{holder.title}, which has changed since its last trust: settle that first "
-                    f"(a git command there, or gitwary diff)")
+                    f"(a git command there, or gitblocker diff)")
     except (Refuse, OSError):
         pass
     return None
@@ -5392,7 +5398,7 @@ def trust_holder(insp: Inspection) -> Path | None:
     tree with that repository (its walk descends those roots,
     gitdir_roots; its scan reads their config against their tree, [39]
     [68] [125]), and a git run from the tree died "never trusted" all the
-    same, until a `gitwary trust` in each submodule and each worktree.
+    same, until a `gitblocker trust` in each submodule and each worktree.
     The marker's rule for a child git (Judged.covers), held to the
     reference instead of to a live command.
 
@@ -5482,15 +5488,15 @@ def check_or_die(repo: Repo, key: Path, old: Manifest | None, new: dict,
         rule()
         why = "trusted by an older version" if old else "never trusted"
         if repo.apart:
-            # `gitwary trust` typed in the tree would bless `<tree>/.git`.
+            # `gitblocker trust` typed in the tree would bless `<tree>/.git`.
             raise Refuse(f"repository {why}: {repo.title}\n  Inspect its config and hooks, then:  "
                          + STYLE.cyan(f"GIT_DIR={shlex.quote(str(repo.gitdir))} "
-                                      f"GIT_WORK_TREE={shlex.quote(str(repo.label))} gitwary trust"))
+                                      f"GIT_WORK_TREE={shlex.quote(str(repo.label))} gitblocker trust"))
         held = holder_unsettled(repo) if old is None else None
         if held:
             raise Refuse(f"repository {why}: {repo.title}\n  Its git directory is inside {held}.")
         raise Refuse(f"repository {why}: {repo.title}\n  Inspect .git/config and .git/hooks, then:  "
-                     + STYLE.cyan("gitwary trust"))
+                     + STYLE.cyan("gitblocker trust"))
     if old.entries == new:
         if pending_path(key).is_file():
             clear_pending(key)           # the state came back on its own
@@ -5518,17 +5524,17 @@ def check_or_die(repo: Repo, key: Path, old: Manifest | None, new: dict,
         return
     if interactive and not has_tty():
         # Run by a program (editor, build, cron): nobody reads this. Record
-        # the state and wait for `gitwary pending`; shortcut 3.
+        # the state and wait for `gitblocker pending`; shortcut 3.
         outcome = wait_for_decision(repo, key, new, refs)
         if outcome == "allowed":
-            info(f"allowed through gitwary pending: {repo.title}")
+            info(f"allowed through gitblocker pending: {repo.title}")
             return
-        e = Refuse("refused through gitwary pending." if outcome == "refused" else
+        e = Refuse("refused through gitblocker pending." if outcome == "refused" else
                    f"no decision within {wait_seconds():g} s: refusing to run git. "
-                   f"In a terminal:  gitwary pending")
+                   f"In a terminal:  gitblocker pending")
         e.recorded = True
         raise e
-    hint("If legitimate:  gitwary trust      Otherwise:  gitwary restore")
+    hint("If legitimate:  gitblocker trust      Otherwise:  gitblocker restore")
     raise Refuse("refusing to run git.")
 
 
@@ -5541,14 +5547,14 @@ def check_or_die(repo: Repo, key: Path, old: Manifest | None, new: dict,
 # - `--version`, `version` as the first argument: git.c maps `--version` to
 #   the `version` command, which has no RUN_SETUP flag — no
 #   setup_git_directory, hence no repository config, no `pager.version`,
-#   no alias. lazygit and fugitive probe it first and took gitwary's
+#   no alias. lazygit and fugitive probe it first and took gitblocker's
 #   refusal for an old git. `git -p version` or `git -C x version` is not
 #   on the list: a global option first means the full check.
 # - `git-receive-pack`, `git-upload-pack`, `git-upload-archive` as the
 #   invoked name: on Debian they are symlinks to `/usr/bin/git`, so with the
-#   system-wide install sshd runs gitwary under those names for every push
+#   system-wide install sshd runs gitblocker under those names for every push
 #   and fetch *to* the machine. They serve a repository named by argument
-#   (a bare one, which gitwary does not handle) and run nothing of the
+#   (a bare one, which gitblocker does not handle) and run nothing of the
 #   cwd's; a local push already reaches them unwrapped through the real
 #   git's exec path. Every ssh push to the VM failed before this entry.
 # - `--exec-path`, `--html-path`, `--man-path`, `--info-path` as the first
@@ -5580,11 +5586,11 @@ def passthrough(name: str, args: list[str]) -> list[str] | None:
         # `git-shell` run `git upload-pack <dir>` ([106]). Its children
         # (`index-pack`, `pack-objects`, `update-server-info`,
         # `maintenance`, the hooks) run in the served repository, a bare one
-        # gitwary does not handle: they inherit a marker for it — for it
+        # gitblocker does not handle: they inherit a marker for it — for it
         # alone: a marker covering anything let a `post-receive` of the hub
         # that runs `cd site && git pull` enter `site` unjudged. [105]
         # Without a marker every ssh push to the host died in `index-pack`
-        # once gitwary sat at the exec path — the incident that created
+        # once gitblocker sat at the exec path — the incident that created
         # TRANSPORT, one level down.
         served = _served_repository(args[1:])
         if served is not None:
@@ -5607,18 +5613,18 @@ def _served_repository(args: list[str]) -> tuple[Path, Path, Path, list[Path]] |
 # ------------------------------------------------------------- child gits
 # Every git enters another repository through a child process, and the
 # child is `<exec-path>/git` (setup_path puts the exec path first in its
-# PATH): with gitwary diverted there, every child is gitwary
-# (DESIGN-exec-path.md). A marker in the environment of the git gitwary
+# PATH): with gitblocker diverted there, every child is gitblocker
+# (DESIGN-exec-path.md). A marker in the environment of the git gitblocker
 # runs says which repository this command has already judged: a child in
 # that repository does not judge it again — what the command itself writes
 # (`submodule add`, `remote add`, `push -u`) is judged at the next command,
 # as before — while a child in any other repository, a submodule or a
 # planted `vendor/x`, judges it as a first process would, and refuses a
 # repository never trusted. No route to guess: whatever enters, enters
-# through gitwary. The environment is trusted here as everywhere else
-# (`GITWARY_REAL_GIT`, `GIT_DIR`): whoever sets the user's environment is
+# through gitblocker. The environment is trusted here as everywhere else
+# (`GITBLOCKER_REAL_GIT`, `GIT_DIR`): whoever sets the user's environment is
 # outside the model (DESIGN.md, Known limitations).
-JUDGED_ENV = "GITWARY_JUDGED"
+JUDGED_ENV = "GITBLOCKER_JUDGED"
 
 
 class Judged:
@@ -5633,7 +5639,7 @@ class Judged:
     `clone=` in place of `new=` for a clone that creates its gitdir, which
     also enters the repositories it borrows from, [156]). Paths are
     hex-encoded: they hold anything but NUL. `pid`, `start`: the process
-    that set the marker — gitwary, which execs the real git under its own
+    that set the marker — gitblocker, which execs the real git under its own
     pid, or stays its parent for a clone — and its start time. The marker
     is valid while that process is an ancestor of this one: the lifetime of
     the command, however long (a `clone --recurse-submodules` of a large
@@ -5734,12 +5740,12 @@ class Judged:
         if not named:
             return True
         if root is None:                    # served: nobody hashed a tree for it
-            if os.environ.get("GITWARY_DEBUG"):
+            if os.environ.get("GITBLOCKER_DEBUG"):
                 err(san(f"child git: the config names {named[0]} in the served repository's tree"))
             return False
         old = load_manifest(state_key(Path(self.paths[3]), gitdir))
         if old is None or not old.current:
-            if os.environ.get("GITWARY_DEBUG"):
+            if os.environ.get("GITBLOCKER_DEBUG"):
                 err(san(f"child git: the config names {named[0]} in another tree, nothing hashed"))
             return False
         hashed = {p for _, p in old.refs}
@@ -5753,7 +5759,7 @@ class Judged:
             was = {k[1][len(rel):]: (e.kind, e.mode, e.sha) for k, e in old.entries.items()
                    if k[0] == "wt" and (k[1] == rel or k[1].startswith(rel + "/"))}
             if (root / rel) not in hashed or now != was:
-                if os.environ.get("GITWARY_DEBUG"):
+                if os.environ.get("GITBLOCKER_DEBUG"):
                     err(san(f"child git: {p} is named by the config in another tree, not hashed"))
                 return False
         return True
@@ -5841,7 +5847,7 @@ def read_judged() -> Judged | None:
 
 
 def set_judged(kind: str, *paths: str, pid: int | None = None) -> None:
-    """The marker for the git this process runs: this process (gitwary,
+    """The marker for the git this process runs: this process (gitblocker,
     which execs the real git under its own pid, or stays the parent of a
     clone) and its start time. `pid`: the unit tests, which set and read
     in one process, name their parent."""
@@ -5853,13 +5859,13 @@ def set_judged(kind: str, *paths: str, pid: int | None = None) -> None:
     os.environ[JUDGED_ENV] = f"{pid}.{start}:{kind}=" + ",".join(os.fsencode(p).hex() for p in paths)
 
 
-SHIM_DEFAULT = "~/.local/lib/gitwary-exec"
+SHIM_DEFAULT = "~/.local/lib/gitblocker-exec"
 
 
 def _core_exec_path() -> tuple[Path, Path]:
     """The real git's own exec path and binary: `git --exec-path` without
     GIT_EXEC_PATH (which it would echo), and the binary there: `git.real`
-    when the exec path is diverted (Debian; its `git` is then a gitwary,
+    when the exec path is diverted (Debian; its `git` is then a gitblocker,
     this one or another install's), else `git`."""
     import subprocess
     env = {k: v for k, v in os.environ.items() if k != "GIT_EXEC_PATH"}
@@ -5881,14 +5887,14 @@ def _core_exec_path() -> tuple[Path, Path]:
 
 
 def cmd_exec_path(args: list[str]) -> None:
-    """`gitwary exec-path [<dir>]`: (re)build an exec path whose `git` is
-    gitwary, for GIT_EXEC_PATH where git's own cannot be diverted (macOS:
+    """`gitblocker exec-path [<dir>]`: (re)build an exec path whose `git` is
+    gitblocker, for GIT_EXEC_PATH where git's own cannot be diverted (macOS:
     SIP, Homebrew's Cellar; a user without root). Every entry of the real exec path is linked by
     its unresolved path (Homebrew's `opt/git/libexec/git-core` survives
-    `brew upgrade`); a dashed builtin to `git` (gitwary, as the real
-    layout has it); `git.real` to the real binary, which gitwary runs
+    `brew upgrade`); a dashed builtin to `git` (gitblocker, as the real
+    layout has it); `git.real` to the real binary, which gitblocker runs
     first (real_git): a GUI app's PATH has only Apple's git. [119] The
-    directory holds only links gitwary made: anything else, refused."""
+    directory holds only links gitblocker made: anything else, refused."""
     if len(args) > 1:
         raise Refuse("exec-path takes at most one directory")
     dest = Path(os.path.expanduser(args[0] if args else SHIM_DEFAULT)).absolute()
@@ -5906,11 +5912,11 @@ def cmd_exec_path(args: list[str]) -> None:
 
     stray = [p for p in dest.iterdir() if not ours(p)]
     if stray:
-        raise Refuse(f"{dest} holds entries gitwary did not link ({san(stray[0].name)}…): not touched")
+        raise Refuse(f"{dest} holds entries gitblocker did not link ({san(stray[0].name)}…): not touched")
     for p in dest.iterdir():
         p.unlink()
 
-    def is_git(p: Path) -> bool:                # a symlink or hard link to the real git, or gitwary
+    def is_git(p: Path) -> bool:                # a symlink or hard link to the real git, or gitblocker
         try:
             return os.path.samefile(p, real) or p.resolve() == me
         except OSError:
@@ -5928,7 +5934,7 @@ def cmd_exec_path(args: list[str]) -> None:
     err(san(f"  shell profile:  export GIT_EXEC_PATH={q}"))
     if sys.platform == "darwin":
         err(san(f"  GUI apps:       launchctl setenv GIT_EXEC_PATH {q}"))
-    err("  after a git upgrade: gitwary exec-path again (trust says when)")
+    err("  after a git upgrade: gitblocker exec-path again (trust says when)")
 
 
 def warn_accepted_limitations(insp: "Inspection") -> None:
@@ -5944,7 +5950,7 @@ def warn_accepted_limitations(insp: "Inspection") -> None:
     else's commit replaces them after the check, and the same command — or
     its child gits, which inherit the judgment — reads the new version.
     [44] [95] And a `submodule.active` pathspec when the fsmonitor pin is
-    off (GITWARY_KEEP_FSMONITOR): an in-process entry with no child to
+    off (GITBLOCKER_KEEP_FSMONITOR): an in-process entry with no child to
     judge it and nothing to disarm it. [126]"""
     intree = tree_named(insp.scan)
     if intree:
@@ -5955,22 +5961,22 @@ def warn_accepted_limitations(insp: "Inspection") -> None:
              f"Review incoming changes to these files.")
     if insp.scan.split_index:
         warn("core.splitIndex = true: the next index git writes is a split index, whose "
-             "gitlinks gitwary cannot read — every command will be refused until "
+             "gitlinks gitblocker cannot read — every command will be refused until "
              "`git update-index --no-split-index` then `git config --unset core.splitIndex`.")
-    if insp.scan.active_pathspecs and _env_bool("GITWARY_KEEP_FSMONITOR"):
+    if insp.scan.active_pathspecs and _env_bool("GITBLOCKER_KEEP_FSMONITOR"):
         vals = " ".join(sorted(insp.scan.active_pathspecs))
         warn(f"submodule.active = {vals}: every submodule path found in a commit counts "
              f"as active, with nothing written to the config. A repository planted in the "
              f"work tree and named by a commit someone else wrote then runs its "
              f"core.fsmonitor under `git grep --recurse-submodules <rev>`, which "
-             f"GITWARY_KEEP_FSMONITOR lets through. Way out: unset it, or `git config "
+             f"GITBLOCKER_KEEP_FSMONITOR lets through. Way out: unset it, or `git config "
              f"--unset-all submodule.active` (real submodules stay active through their "
              f"submodule.<name>.url).")
 
 
 def check_wrap() -> None:
     """Warn (without refusing) when git's exec path does not lead to
-    gitwary: the children of every git then run unwrapped, and a
+    gitblocker: the children of every git then run unwrapped, and a
     repository git enters through one — a submodule, a repository planted
     in the tree — is not judged at entry. The exec path is GIT_EXEC_PATH
     when set, else what the real git answers to `--exec-path`. A wrapped
@@ -5989,9 +5995,9 @@ def check_wrap() -> None:
     except OSError:
         wrapped = False
     fix = ("`dpkg-divert` at the exec path (README, System-wide)" if Path("/usr/bin/dpkg-divert").exists()
-           else "`gitwary exec-path`, then GIT_EXEC_PATH (README)")
+           else "`gitblocker exec-path`, then GIT_EXEC_PATH (README)")
     if not wrapped:
-        warn(f"git's exec path ({san(p) or 'unknown'}) does not lead to gitwary: a repository git "
+        warn(f"git's exec path ({san(p) or 'unknown'}) does not lead to gitblocker: a repository git "
              f"enters through a child (a submodule, one planted in the tree) is not judged. Fix: {fix}.")
         return
     if core is None or Path(p).resolve() == core.resolve():
@@ -6001,7 +6007,7 @@ def check_wrap() -> None:
     dead = sorted(n for n in have if (Path(p) / n).is_symlink() and not (Path(p) / n).exists())
     if lost or dead:
         warn(f"stale exec path {san(p)}: {len(lost)} entries of {san(str(core))} missing, "
-             f"{len(dead)} linking nowhere (git upgraded?): gitwary exec-path {san(p)}")
+             f"{len(dead)} linking nowhere (git upgraded?): gitblocker exec-path {san(p)}")
 
 
 def main(argv: list[str]) -> int:
@@ -6012,7 +6018,7 @@ def main(argv: list[str]) -> int:
         mode, argv = "exec", argv[1:]    # invoked through a symlink named git
     elif name.startswith("git-"):
         # `<exec-path>/git-<cmd>` is a symlink to `<exec-path>/git` (Debian:
-        # 160 builtins); with gitwary diverted there, a child git or a
+        # 160 builtins); with gitblocker diverted there, a child git or a
         # dashed invocation lands here under that name.
         mode, argv = "exec", [name[4:], *argv[1:]]
     else:
@@ -6043,11 +6049,11 @@ def main(argv: list[str]) -> int:
         elif cmd in ("help", "-h", "--help"):
             print(__doc__); return 0
         elif cmd in ("version", "--version"):
-            print(f"gitwary {VERSION}"); return 0
+            print(f"gitblocker {VERSION}"); return 0
         elif cmd:
-            # A typo (`gitwary tust`) used to fall through to a silent check
+            # A typo (`gitblocker tust`) used to fall through to a silent check
             # whose exit 0 looked like a success of the intended command.
-            raise Refuse(f"unknown command {cmd!r} (see gitwary help)")
+            raise Refuse(f"unknown command {cmd!r} (see gitblocker help)")
         if mode != "exec" and argv:
             raise Refuse(f"{cmd or 'check'} takes no argument: {' '.join(argv)!r}")
         if cmd in ("list", "prune", "retrust"):
@@ -6064,7 +6070,7 @@ def main(argv: list[str]) -> int:
         newrepo = parse_new_repo(argv)
         orig = apply_global_options(argv)
     # A refusal that nobody will read (exec mode, no controlling terminal) is
-    # recorded for `gitwary pending`. The "changed" case records itself
+    # recorded for `gitblocker pending`. The "changed" case records itself
     # (and waits); here the never-trusted and structural ones.
     label: Path = Path.cwd()
     named: str | None = None
@@ -6094,7 +6100,7 @@ def main(argv: list[str]) -> int:
         if judged is not None:
             rest = split_global_options(argv, orig).rest
             covered = judged.covers(repo)
-            if os.environ.get("GITWARY_DEBUG"):
+            if os.environ.get("GITBLOCKER_DEBUG"):
                 err(f"child git: marker {judged.kind}={judged.paths}, repository gitdir={repo.gitdir} "
                     f"common={repo.common} root={repo.root} → {'inherits' if covered else 'judges'}")
             if covered:
@@ -6157,7 +6163,7 @@ def main(argv: list[str]) -> int:
         return 0
     if mode == "diff":
         if old is None:
-            raise Refuse(f"no trust state for {repo.title} (gitwary trust)")
+            raise Refuse(f"no trust state for {repo.title} (gitblocker trust)")
         if old.entries == new:
             info(f"no changes in {repo.title}")
         else:
@@ -6166,7 +6172,7 @@ def main(argv: list[str]) -> int:
         return 0
     if mode == "restore":
         if old is None:
-            raise Refuse(f"no trust state for {repo.title} (gitwary trust)")
+            raise Refuse(f"no trust state for {repo.title} (gitblocker trust)")
         restore(repo, key, old.entries, new, yes, old.refs)
         return 0
 
@@ -6216,8 +6222,8 @@ if __name__ == "__main__":
     except Exception as e:               # noqa: BLE001 — never a raw traceback
         # Fail closed: git is not run. The message is sanitized like everything
         # else; the full traceback only on request.
-        if os.environ.get("GITWARY_DEBUG"):
+        if os.environ.get("GITBLOCKER_DEBUG"):
             raise
         fail(f"internal error ({type(e).__name__}): {e}")
-        hint("retry with GITWARY_DEBUG=1 for the full traceback")
+        hint("retry with GITBLOCKER_DEBUG=1 for the full traceback")
         sys.exit(1)

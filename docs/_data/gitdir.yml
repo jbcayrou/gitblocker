@@ -1,4 +1,4 @@
-# The gitdir as gitwary sees it (section "A fingerprint, not a blocklist").
+# The gitdir as gitblocker sees it (section "A fingerprint, not a blocklist").
 # k: the tree line; t: the note on the right; volatile: dimmed, rewritten by git and ignored.
 - { k: ".git/", t: "" }
 - { k: "├── config", t: "hashed, and parsed for paths" }

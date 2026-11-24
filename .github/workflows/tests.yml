@@ -96,4 +96,4 @@ jobs:
       # As root, in the job's own container: the script installs and
       # removes git, and says so before doing anything elsewhere.
       - name: Build, install, upgrade, remove, purge
-        run: GITWARY_DEB_TEST=throwaway ci/test-deb.sh
+        run: GITBLOCKER_DEB_TEST=throwaway ci/test-deb.sh

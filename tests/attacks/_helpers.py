@@ -4,45 +4,45 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from tests.conftest import GW
+from tests.conftest import GB
 
 
-def commit(gw: GW, repo: Path, name: str = "f", content: str = "b") -> None:
+def commit(gb: GB, repo: Path, name: str = "f", content: str = "b") -> None:
     """One commit of `name` holding `content`, with the raw git."""
     (repo / name).write_text(content + "\n")
-    assert gw.git("add", name, cwd=repo).rc == 0
-    assert gw.git("commit", "-qm", f"c-{name}-{content}", cwd=repo).rc == 0
+    assert gb.git("add", name, cwd=repo).rc == 0
+    assert gb.git("commit", "-qm", f"c-{name}-{content}", cwd=repo).rc == 0
 
 
-def conflicting_notes(gw: GW, repo: Path) -> None:
+def conflicting_notes(gb: GB, repo: Path) -> None:
     """Two notes refs, `commits` and `other`, that disagree on HEAD's note:
     `git notes merge other` stops on a conflict."""
-    assert gw.git("notes", "add", "-m", "base", "HEAD", cwd=repo).rc == 0
-    assert gw.git("update-ref", "refs/notes/other", "refs/notes/commits", cwd=repo).rc == 0
-    assert gw.git("notes", "add", "-f", "-m", "ours", "HEAD", cwd=repo).rc == 0
-    assert gw.git("notes", "--ref=other", "add", "-f", "-m", "theirs", "HEAD", cwd=repo).rc == 0
+    assert gb.git("notes", "add", "-m", "base", "HEAD", cwd=repo).rc == 0
+    assert gb.git("update-ref", "refs/notes/other", "refs/notes/commits", cwd=repo).rc == 0
+    assert gb.git("notes", "add", "-f", "-m", "ours", "HEAD", cwd=repo).rc == 0
+    assert gb.git("notes", "--ref=other", "add", "-f", "-m", "theirs", "HEAD", cwd=repo).rc == 0
 
 
-def make_source(gw: GW, tmp_path: Path, name: str = "subsrc") -> Path:
+def make_source(gb: GB, tmp_path: Path, name: str = "subsrc") -> Path:
     s = tmp_path / name
     if not s.exists():
-        assert gw.git("init", "-q", str(s)).rc == 0
+        assert gb.git("init", "-q", str(s)).rc == 0
         (s / "s").write_text("s\n")
-        assert gw.git("add", "s", cwd=s).rc == 0
-        assert gw.git("commit", "-qm", "s", cwd=s).rc == 0
+        assert gb.git("add", "s", cwd=s).rc == 0
+        assert gb.git("commit", "-qm", "s", cwd=s).rc == 0
     return s
 
 
-def add_submodule(gw: GW, repo: Path, tmp_path: Path, name: str = "sub") -> Path:
+def add_submodule(gb: GB, repo: Path, tmp_path: Path, name: str = "sub") -> Path:
     """Add a real submodule `name` and commit it. Returns its path."""
-    src = make_source(gw, tmp_path)
-    r = gw.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(src), name, cwd=repo)
+    src = make_source(gb, tmp_path)
+    r = gb.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(src), name, cwd=repo)
     assert r.rc == 0, r.text
-    assert gw.git("commit", "-qm", "sub", cwd=repo).rc == 0
+    assert gb.git("commit", "-qm", "sub", cwd=repo).rc == 0
     return repo / name
 
 
-def forge_index(gw: GW, repo: Path, extra: list[tuple[int, bytes, bytes]],
+def forge_index(gb: GB, repo: Path, extra: list[tuple[int, bytes, bytes]],
                 gitdir: Path | None = None) -> None:
     """Rewrite the index of `repo` (or of `gitdir`, for a submodule) by hand:
     its current entries plus `extra` = (mode, content, name). Written as raw
@@ -51,13 +51,13 @@ def forge_index(gw: GW, repo: Path, extra: list[tuple[int, bytes, bytes]],
     import hashlib
     gitdir = gitdir or repo / ".git"
     entries = []
-    for rec in gw.git("ls-files", "-s", "-z", cwd=repo).out.split("\0"):
+    for rec in gb.git("ls-files", "-s", "-z", cwd=repo).out.split("\0"):
         if rec:
             meta, name = rec.split("\t", 1)
             mode, sha, _ = meta.split()
             entries.append((int(mode, 8), bytes.fromhex(sha), name.encode()))
     for mode, content, name in extra:
-        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo, env=gw.env,
+        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo, env=gb.env,
                               input=content, capture_output=True, check=True).stdout
         entries.append((mode, bytes.fromhex(blob.decode().strip()), name))
     body = b"DIRC" + (2).to_bytes(4, "big") + len(entries).to_bytes(4, "big")
@@ -86,7 +86,7 @@ INDEX_ESCAPES = {
 # ------------------------------------------------ features of the git under test
 # Probed on the git the scenarios use (REAL_GIT), never by version number: a
 # positive control that needs a feature skips when that git lacks it, the
-# attack itself does not (gitwary must watch both readings of the value).
+# attack itself does not (gitblocker must watch both readings of the value).
 _FEATURES: dict[str, bool] = {}
 
 
@@ -136,14 +136,14 @@ def git_has(feature: str) -> bool:
 
 
 # ------------------------------------- sandboxes of the review of 2026-10-24 (2)
-# Shared by the attack (gitwary must refuse at the check) and its positive
+# Shared by the attack (gitblocker must refuse at the check) and its positive
 # control in test_commands.py (the real git, same planting, runs the payload).
-def _git_input(gw: GW, cwd: Path, text: str, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, env=gw.env, input=text,
+def _git_input(gb: GB, cwd: Path, text: str, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, env=gb.env, input=text,
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def plant_sparse_gitlink(gw: GW, repo: Path, tmp_path: Path, fsmonitor: str) -> None:
+def plant_sparse_gitlink(gb: GB, repo: Path, tmp_path: Path, fsmonitor: str) -> None:
     """[87] The user: a cone sparse-checkout of `src/`, `vendor/` outside the
     cone, trusted. The sandbox: a tree for `vendor/` with a gitlink
     `vendor/evil` (objects are volatile), a sparse index (`sdir`, vendor/ one
@@ -154,19 +154,19 @@ def plant_sparse_gitlink(gw: GW, repo: Path, tmp_path: Path, fsmonitor: str) -> 
     (repo / "src/s").write_text("s\n")
     (repo / "vendor").mkdir()
     (repo / "vendor/v").write_text("v\n")
-    assert gw.git("add", ".", cwd=repo).rc == 0
-    assert gw.git("commit", "-qm", "tree", cwd=repo).rc == 0
-    assert gw.git("sparse-checkout", "set", "--cone", "src", cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("add", ".", cwd=repo).rc == 0
+    assert gb.git("commit", "-qm", "tree", cwd=repo).rc == 0
+    assert gb.git("sparse-checkout", "set", "--cone", "src", cwd=repo).rc == 0
+    gb.trust(repo)
     # the sandbox
-    evil = make_source(gw, tmp_path, "evil-src")
-    sha = gw.git("rev-parse", "HEAD", cwd=evil).out.strip()
-    vt = _git_input(gw, repo, gw.git("ls-tree", "HEAD:vendor", cwd=repo).out
+    evil = make_source(gb, tmp_path, "evil-src")
+    sha = gb.git("rev-parse", "HEAD", cwd=evil).out.strip()
+    vt = _git_input(gb, repo, gb.git("ls-tree", "HEAD:vendor", cwd=repo).out
                     + f"160000 commit {sha}\tevil\n", "mktree", "--missing")
     lines = [ln if not ln.endswith("\tvendor") else f"040000 tree {vt}\tvendor"
-             for ln in gw.git("ls-tree", "HEAD", cwd=repo).out.splitlines()]
-    rt = _git_input(gw, repo, "\n".join(lines) + "\n", "mktree", "--missing")
-    r = gw.git("-c", "index.sparse=true", "-c", "core.sparseCheckout=true",
+             for ln in gb.git("ls-tree", "HEAD", cwd=repo).out.splitlines()]
+    rt = _git_input(gb, repo, "\n".join(lines) + "\n", "mktree", "--missing")
+    r = gb.git("-c", "index.sparse=true", "-c", "core.sparseCheckout=true",
                "-c", "core.sparseCheckoutCone=true", "read-tree", "-m", "-u", "HEAD", rt, cwd=repo)
     assert r.rc == 0, r.text
     assert b"sdir" in (repo / ".git/index").read_bytes(), "the sandbox's index is not sparse"
@@ -174,10 +174,10 @@ def plant_sparse_gitlink(gw: GW, repo: Path, tmp_path: Path, fsmonitor: str) -> 
     (repo / "vendor").mkdir(exist_ok=True)
     (repo / "vendor/v").write_text("v\n")
     shutil.copytree(evil / ".git", repo / "vendor/evil/.git")
-    assert gw.git("config", "core.fsmonitor", fsmonitor, cwd=repo / "vendor/evil").rc == 0
+    assert gb.git("config", "core.fsmonitor", fsmonitor, cwd=repo / "vendor/evil").rc == 0
 
 
-def hardlink_editmsg_to_hook(gw: GW, repo: Path, hook: Path, payload: str) -> None:
+def hardlink_editmsg_to_hook(gb: GB, repo: Path, hook: Path, payload: str) -> None:
     """[88] The user has a trusted, executable `hook` (commit-msg). The
     sandbox: a commit whose message is `payload` (shell) moved to HEAD
     (objects, refs: volatile), and `.git/COMMIT_EDITMSG` (volatile) replaced
@@ -185,10 +185,10 @@ def hardlink_editmsg_to_hook(gw: GW, repo: Path, hook: Path, payload: str) -> No
     commit --amend` writes the message into COMMIT_EDITMSG, i.e. into the
     hook, then runs it."""
     (repo / "work.txt").write_text("the sandbox's work\n")     # an amend that is not empty
-    assert gw.git("add", "work.txt", cwd=repo).rc == 0
-    tree = gw.git("write-tree", cwd=repo).out.strip()
-    c = _git_input(gw, repo, f"subject\n\n{payload}\n", "commit-tree", tree, "-p", "HEAD")
-    assert gw.git("update-ref", "HEAD", c, cwd=repo).rc == 0
+    assert gb.git("add", "work.txt", cwd=repo).rc == 0
+    tree = gb.git("write-tree", cwd=repo).out.strip()
+    c = _git_input(gb, repo, f"subject\n\n{payload}\n", "commit-tree", tree, "-p", "HEAD")
+    assert gb.git("update-ref", "HEAD", c, cwd=repo).rc == 0
     import os
     msg = repo / ".git/COMMIT_EDITMSG"
     msg.unlink(missing_ok=True)
@@ -196,20 +196,20 @@ def hardlink_editmsg_to_hook(gw: GW, repo: Path, hook: Path, payload: str) -> No
     assert hook.stat().st_nlink == 2
 
 
-def submodule_source_with(gw: GW, tmp_path: Path, files: dict[str, str]) -> Path:
+def submodule_source_with(gb: GB, tmp_path: Path, files: dict[str, str]) -> Path:
     """The upstream of a submodule carrying executable `files` (a hooks
     directory, a convention script), with a second commit: `add_submodule`
     takes it (same name as make_source's), and a submodule left one commit
     behind gives `git submodule update` a checkout to do."""
     s = tmp_path / "subsrc"
-    assert gw.git("init", "-q", str(s)).rc == 0
+    assert gb.git("init", "-q", str(s)).rc == 0
     for rel, body in files.items():
         (s / rel).parent.mkdir(parents=True, exist_ok=True)
         (s / rel).write_text(body)
         (s / rel).chmod(0o755)
-    assert gw.git("add", ".", cwd=s).rc == 0
-    assert gw.git("commit", "-qm", "one", cwd=s).rc == 0
-    assert gw.git("commit", "-q", "--allow-empty", "-m", "two", cwd=s).rc == 0
+    assert gb.git("add", ".", cwd=s).rc == 0
+    assert gb.git("commit", "-qm", "one", cwd=s).rc == 0
+    assert gb.git("commit", "-q", "--allow-empty", "-m", "two", cwd=s).rc == 0
     return s
 
 
@@ -235,7 +235,7 @@ PLANTED_KEYS = ("core.fsmonitor", "core.sshCommand", "credential.helper", "core.
                 "core.alternateRefsCommand", "uploadpack.packObjectsHook")
 
 
-def plant_active_gitlink(gw: GW, repo: Path, tmp_path: Path, planting: str = "tree",
+def plant_active_gitlink(gb: GB, repo: Path, tmp_path: Path, planting: str = "tree",
                          gitfile: bool = False) -> Path:
     """The user trusted a repository whose config holds `submodule.active = .`
     (what `clone --recurse-submodules` leaves): the activation an in-process
@@ -254,16 +254,16 @@ def plant_active_gitlink(gw: GW, repo: Path, tmp_path: Path, planting: str = "tr
     `payload` touches when it runs."""
     import os
     from tests.conftest import write_exec
-    assert gw.git("config", "submodule.active", ".", cwd=repo).rc == 0
-    gw.trust(repo)
+    assert gb.git("config", "submodule.active", ".", cwd=repo).rc == 0
+    gb.trust(repo)
     mark = tmp_path / "RAN"
     p = payload(tmp_path)
     x = repo / "vendor/x"
-    assert gw.git("init", "-q", str(x)).rc == 0
+    assert gb.git("init", "-q", str(x)).rc == 0
     (x / "s").write_text("s\n")
-    gw.git("add", "s", cwd=x)
-    gw.git("commit", "-qm", "s", cwd=x)
-    sub = gw.git("rev-parse", "HEAD", cwd=x).out.strip()
+    gb.git("add", "s", cwd=x)
+    gb.git("commit", "-qm", "s", cwd=x)
+    sub = gb.git("rev-parse", "HEAD", cwd=x).out.strip()
     gitdir = x / ".git"
     if gitfile:
         import shutil
@@ -274,24 +274,24 @@ def plant_active_gitlink(gw: GW, repo: Path, tmp_path: Path, planting: str = "tr
     for h in PLANTED_HOOKS:
         write_exec(gitdir / "planted-hooks" / h, f"#!/bin/sh\ntouch '{mark}'\n")
     for k in PLANTED_KEYS:
-        assert gw.git("config", k, str(p), cwd=x).rc == 0
-    assert gw.git("config", "core.hooksPath", str(gitdir / "planted-hooks"), cwd=x).rc == 0
-    assert gw.git("config", "alias.status", f"!{p}", cwd=x).rc == 0
-    assert gw.git("config", "log.showSignature", "true", cwd=x).rc == 0
+        assert gb.git("config", k, str(p), cwd=x).rc == 0
+    assert gb.git("config", "core.hooksPath", str(gitdir / "planted-hooks"), cwd=x).rc == 0
+    assert gb.git("config", "alias.status", f"!{p}", cwd=x).rc == 0
+    assert gb.git("config", "log.showSignature", "true", cwd=x).rc == 0
     (gitdir / "inc").write_text(f"[core]\n\tfsmonitor = {p}\n")
-    assert gw.git("config", "include.path", str(gitdir / "inc"), cwd=x).rc == 0
+    assert gb.git("config", "include.path", str(gitdir / "inc"), cwd=x).rc == 0
     (x / "s").write_text("dirty\n")
     # the commit: HEAD's tree + .gitmodules + the gitlink, the branch moved
-    blob = _git_input(gw, repo, '[submodule "x"]\n\tpath = vendor/x\n\turl = ./vendor/x\n',
+    blob = _git_input(gb, repo, '[submodule "x"]\n\tpath = vendor/x\n\turl = ./vendor/x\n',
                       "hash-object", "-w", "--stdin")
-    vt = _git_input(gw, repo, f"160000 commit {sub}\tx\n", "mktree", "--missing")
-    tree = _git_input(gw, repo, gw.git("ls-tree", "HEAD", cwd=repo).out
+    vt = _git_input(gb, repo, f"160000 commit {sub}\tx\n", "mktree", "--missing")
+    tree = _git_input(gb, repo, gb.git("ls-tree", "HEAD", cwd=repo).out
                       + f"100644 blob {blob}\t.gitmodules\n040000 tree {vt}\tvendor\n", "mktree")
-    c = gw.git("commit-tree", "-p", "HEAD", "-m", "evil", tree, cwd=repo).out.strip()
-    assert gw.git("update-ref", "HEAD", c, cwd=repo).rc == 0
+    c = gb.git("commit-tree", "-p", "HEAD", "-m", "evil", tree, cwd=repo).out.strip()
+    assert gb.git("update-ref", "HEAD", c, cwd=repo).rc == 0
     if planting == "index":
-        assert gw.git("read-tree", "HEAD", cwd=repo).rc == 0
-        assert gw.git("checkout", "--", ".gitmodules", cwd=repo).rc == 0
+        assert gb.git("read-tree", "HEAD", cwd=repo).rc == 0
+        assert gb.git("checkout", "--", ".gitmodules", cwd=repo).rc == 0
     else:
         assert planting == "tree", planting
     assert not mark.exists(), "the planting itself ran the payload"

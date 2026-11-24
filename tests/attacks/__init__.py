@@ -1,18 +1,18 @@
-r"""Attack corpus against gitwary.
+r"""Attack corpus against gitblocker.
 
-Each module in this package exposes ``attack_*(gw, repo, tmp_path)`` functions.
+Each module in this package exposes ``attack_*(gb, repo, tmp_path)`` functions.
 Contract: ``repo`` is a clean repository, with one commit, already trusted by
-``gitwary trust``. The function plays the malicious container: it may only
-modify files (in the tree, in ``.git``, in ``$HOME``) — never call gitwary.
-It may however run ``gw.trust(repo)`` *before* planting, to simulate a
+``gitblocker trust``. The function plays the malicious container: it may only
+modify files (in the tree, in ``.git``, in ``$HOME``) — never call gitblocker.
+It may however run ``gb.trust(repo)`` *before* planting, to simulate a
 legitimate config the victim has trusted (hooksPath, submodule…).
 
-``test_attacks.py`` collects all these functions and checks that gitwary then
+``test_attacks.py`` collects all these functions and checks that gitblocker then
 refuses to run git. To add an attack: write the function in the module of the
 right family (or a new module), nothing else.
 
 Vulnerability catalogue — the ``# [n]`` comments in the tests and in
-gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
+gitblocker.py refer to this list (how the project reviews itself: DESIGN.md,
 "Adversarial review playbook"). Numbers 32–33 are unused.
 
  [1] core.hooksPath pointing into the work tree (husky, lefthook): hooks there
@@ -31,7 +31,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      outside .git/modules.
  [8] Chained include.path: only the first level was parsed.
  [9] `find … -quit` checked only the first nested .git.
-[10] `git -C /elsewhere`, `--git-dir`/`--work-tree`: gitwary checked $PWD,
+[10] `git -C /elsewhere`, `--git-dir`/`--work-tree`: gitblocker checked $PWD,
      not the targeted repository.
 [11] A newline in a file name injected a line into the manifest; `restore`
      read it as an action and deleted .git/HEAD.
@@ -50,7 +50,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      repository's config (commondir/config) was not parsed at all.
 [17] include.path chains deeper than 6 (git follows 10); later, a chain of
      exactly 10 was hashed but not parsed.
-[18] `--work-tree` alone: gitwary chdir'ed into the work tree to pick the
+[18] `--work-tree` alone: gitblocker chdir'ed into the work tree to pick the
      repository while git discovers its gitdir from the cwd.
 [19] `exec` lines injected into rebase-merge/git-rebase-todo during an
      in-progress rebase (volatile directory, outside the fingerprint);
@@ -69,7 +69,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      the target could change freely; a symlink to a directory at depth 3
      (.git/modules/x/hooks -> elsewhere) escaped the structural check.
 [23] Bare gitdir (HEAD + objects/ + refs/) planted in a subdirectory: git
-     discovers it before the parent's .git when run from there; gitwary
+     discovers it before the parent's .git when run from there; gitblocker
      walked up to the real .git and validated the wrong repository.
 [24] Gitfile in a pruned directory + gitlink (`node_modules/pkg/.git` ->
      `gitdir: ../evilgit`): the "gitfile must point under .git/modules" rule
@@ -85,7 +85,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      was the cwd ($HOME walked entirely).
 [29] A forged .git/hooks/HEAD made hooks/ a "gitdir root", excluding its HEAD,
      refs/, logs/, index… from the fingerprint.
-[30] `gitwary trust|diff|restore` outside a repository: silent exit 0.
+[30] `gitblocker trust|diff|restore` outside a repository: silent exit 0.
 [31] core.splitIndex: sharedindex.* alerted permanently and the gitlinks of the
      shared file were not read. Explicit refusal.
 [34] `.lfsconfig` (git-lfs reads lfs.customtransfer.*.path, a program it runs)
@@ -104,7 +104,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
 [39] .git/modules/<x>/config hashed but never parsed: the hooksPath and alias
      scripts it names, in the submodule's tree, were not watched.
 [40] `git --config-env k=V -C <repo>`: unknown option taking an argument, the
-     argument was taken for the subcommand and the -C ignored (gitwary checked
+     argument was taken for the subcommand and the -C ignored (gitblocker checked
      the cwd, git ran in the trapped repository). Unknown options now refused.
 [41] `git --git-dir=.git -C <repo>`: the relative --git-dir was resolved before
      the -C, git resolves it after (another trusted repository was checked).
@@ -112,7 +112,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      an included global config file, `-c init.templateDir`, GIT_CONFIG_COUNT
      or GIT_TEMPLATE_DIR.
 [43] SGR sequences in displayed file content (`ESC[8m` conceal, fg = bg) hid
-     part of the config diff shown before [y/N]; only gitwary's own codes
+     part of the config diff shown before [y/N]; only gitblocker's own codes
      are kept now.
 [44] OPEN — a tracked hook under core.hooksPath in the tree is rewritten by the
      very command the user runs (checkout/merge/reset/pull of a commit the
@@ -126,20 +126,20 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      and hooks/ (and what that config names), never the whole directory.
 [46] The config parser diverged from git's: a UTF-8 BOM, a `\` ending a
      comment line, a `\` at EOF, internal whitespace collapsed, \v / \f /
-     NBSP stripped — each one made gitwary miss a core.hooksPath git
+     NBSP stripped — each one made gitblocker miss a core.hooksPath git
      honoured. Fix: a character-level port of git's config.c.
 [47] core.worktree in .git/config: git takes that directory as the tree and
-     resolves a relative core.hooksPath there; gitwary kept the directory
+     resolves a relative core.hooksPath there; gitblocker kept the directory
      containing .git, so those hooks were never watched.
 [48] Config from the environment or the command line (GIT_CONFIG_COUNT/KEY_n,
      GIT_CONFIG_PARAMETERS, `-c`, `--config-env`) was not read: a
      core.hooksPath set there, pointing into the volume, was never watched.
 [49] Discovery: a `.git` directory git does not recognise (invalid HEAD, no
-     objects/refs) stopped gitwary, which checked — and let the user trust —
+     objects/refs) stopped gitblocker, which checked — and let the user trust —
      a bogus gitdir while git walked up to the parent's; and gitdir variants
      git accepts (HEAD symlink to refs/, `commondir` redirection) were not
      recognised as planted gitdirs [23]. Fix: a port of is_git_directory.
-[50] `~user/` in a path value: git expands it (getpwnam), gitwary only
+[50] `~user/` in a path value: git expands it (getpwnam), gitblocker only
      expanded `~/`, so `core.hooksPath = ~user/vol/hooks` was never watched.
 [51] The merge strategy of an interrupted operation sits in volatile files
      outside the fingerprint: `.git/rebase-merge/strategy` (rebase) and
@@ -150,14 +150,14 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      relative to the cwd, i.e. a script of the work tree, no PATH access
      needed. check_rebase_todo only read the todo `exec` lines. Fix: refuse
      any strategy outside git's builtin set, same escape hatch as the todo
-     (GITWARY_ALLOW_REBASE_EXEC). Found in review by a reporter; the first
+     (GITBLOCKER_ALLOW_REBASE_EXEC). Found in review by a reporter; the first
      fix compared a strip()ped value (`ort\t` passed as `ort`, git execs
      `git-merge-ort<TAB>`), skipped an empty name (git execs `git-merge-`)
      and missed sequencer/opts: all caught by replaying on the Debian VM.
 [52] parse_git_config read the file in text mode: Python's universal newlines
      turned a lone CR into a line break, where git's parser sees whitespace
      kept inside the value. `hooksPath = .githooks<CR>x = y` is one value for
-     git (a directory gitwary never watched); `strategy = ort<CR>x = /y` in
+     git (a directory gitblocker never watched); `strategy = ort<CR>x = /y` in
      sequencer/opts passed the [51] check as `ort` while git execs
      `git-merge-ort<CR>x = /y`, a script of the work tree. Found while
      validating [51]. Fix: read bytes, the port of get_next_char already
@@ -167,20 +167,20 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      `hooksPath = .githooks<CR>x = y` look like two clean lines. The gitfile
      and `commondir` were read with splitlines()/strip() and a lexical
      resolve(): a trailing blank, a lone CR, a second line or ` ../..` gave
-     gitwary a repository where git finds none and dies — no execution,
+     gitblocker a repository where git finds none and dies — no execution,
      but a parity break the suite would have caught. Fix: LF-only split for
      the diff; git's exact reading (trailing CR/LF only) and a strict
      resolve for path files. A NUL in `commondir` is refused, never "not a
      gitdir": git truncates at it and opens the directory, and a planted
      bare gitdir walked past is [23]. The todo files were checked against git 2.47
-     and 2.50 and need nothing: whenever git runs an `exec`, gitwary refuses.
+     and 2.50 and need nothing: whenever git runs an `exec`, gitblocker refuses.
 [54] Repository-local variables of the environment that move git's files:
      GIT_COMMON_DIR replaces the common dir in every case — during
      discovery (is_git_directory looks for objects/ and refs/ there: any
      directory with a valid HEAD becomes a gitdir) and once open (config,
      hooks/, info/, objects/, worktrees/ come from it, the `commondir` file
      is ignored); GIT_INDEX_FILE replaces the index, hence the gitlinks.
-     gitwary read the gitdir's own files and fingerprinted a repository
+     gitblocker read the gitdir's own files and fingerprinted a repository
      git was not using: a hook or a config in a directory of the volume, a
      forged index whose gitlink names a nested trapped repository. The
      sandbox cannot set the variables; a script, a Makefile or a tool of the
@@ -220,7 +220,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      watched `user.signingkey = ~/.ssh/id` (ssh signing: a file ssh-keygen
      reads, never run): the private key was hashed on every command, copied
      into every `<key>.d/ext/`, each rotation refused every repository, and
-     `gitwary restore` wrote the old private key over the new one. Fix: no
+     `gitblocker restore` wrote the old private key over the new one. Fix: no
      `global` scope; `DATA_KEYS` (files git reads as data, mirror of
      DIR_KEYS) not watched; an `ext` file without group/other read bits is
      hashed but never copied nor restored (same trap through
@@ -303,7 +303,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      DIR_KEYS walked the directory recursively: the work tree, its
      neighbours and the gitdir without its volatile exclusions were
      fingerprinted as `ext`, so any commit alerted; with the state
-     directory under it (`~` with `~/.local/state/gitwary`), the manifest
+     directory under it (`~` with `~/.local/state/gitblocker`), the manifest
      `trust` writes was watched too and the repository alerted again after
      every `trust`. Reported as converging after three trusts; the replay
      showed it did not. Fix: a directory that contains the repository is
@@ -320,7 +320,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      gitlink, then shows the local changes, enters `vendor/x` and runs its
      fsmonitor, in the same command; `git stash pop` of a forged
      `refs/stash` does the same through the `git status` it ends with. The
-     index gitwary read had no gitlink. No special config, no trust-time
+     index gitblocker read had no gitlink. No special config, no trust-time
      warning: a generalisation of [44]. `checkout -f`, `reset --hard`,
      `merge`, `pull . main`, `rebase` and `checkout -q` write the gitlink
      without entering it. Found by an adversarial review, replayed against
@@ -335,7 +335,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      test_alias_command_word_as_git.
 [67] Non-bare local remote with a relative core.hooksPath (husky
      `.husky/_`): receive-pack runs hooks in the remote's $GIT_DIR, so git
-     runs `<remote>/.git/.husky/_/<hook>`; gitwary resolved it against
+     runs `<remote>/.git/.husky/_/<hook>`; gitblocker resolved it against
      the remote's work tree. Fix: the remote's relative values resolve
      against its gitdir, where enter_repo chdirs
      (`test_local_remote_relative_hookspath_where_git_resolves_it`: git
@@ -372,12 +372,12 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      that assumes one repository's layout. Way out: `!./tools/lint.sh`.
 [72] `--work-tree` without `--git-dir` (or GIT_WORK_TREE alone):
      git discovers the gitdir from the cwd and uses the given tree, where
-     it resolves a relative core.hooksPath; gitwary checked the
+     it resolves a relative core.hooksPath; gitblocker checked the
      discovered tree. ([18] fixed the discovery half.) Fix: open_repo
      takes GIT_WORK_TREE as the root after discovery, before core.worktree
      (setup_explicit_git_dir's order); a missing directory is refused.
      The state key stays on the directory holding `.git`, so the tree
-     given is trusted through `GIT_WORK_TREE=… gitwary trust`.
+     given is trusted through `GIT_WORK_TREE=… gitblocker trust`.
 [73] remote.pushDefault / branch.<x>.pushRemote / branch.<x>.remote
      naming a path: git pushes to it as a URL; only remote.*.url/pushurl
      were followed, and a bare `git push` has no destination for the [62]
@@ -416,7 +416,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      read-tree, bisect, am, apply do not enter); the real git runs every
      form in the positive control.
 [78] help.autocorrect defeated the command match: `git chekout main` is no
-     command for gitwary, git corrects it to checkout and runs [66]. Fix:
+     command for gitblocker, git corrects it to checkout and runs [66]. Fix:
      with autocorrect on (_autocorrect_on, git's parse_autocorrect), a word
      that is no alias gets the switch when an entering command or alias is
      within git's similarity (prefix, or the weighted distance of
@@ -424,7 +424,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      the one git picks. git is the oracle for 32 typos and 20 values.
      Superseded on 2026-10-24: the switch is the default on every command,
      exempt only status, diff, commit, config and var (SWITCH_EXEMPT,
-     exempt_from_switch); a word gitwary does not know gets it, so the
+     exempt_from_switch); a word gitblocker does not know gets it, so the
      autocorrect model and the Levenshtein port are gone. The list of
      entering commands failed open ([77] after [66]); the exemption fails
      closed.
@@ -468,7 +468,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      config.worktree (git: with extensions.worktreeConfig its value wins);
      open_repo and submodule_trees expanded `~` and `~user` (git copies the
      value as is, check_repo_format's xstrdup, and dies on `chdir '~/t'`):
-     gitwary checked `$HOME/t`, a tree git never opens. Found in the
+     gitblocker checked `$HOME/t`, a tree git never opens. Found in the
      design review of 2026-10-24, replayed against git 2.50. Fix: one
      reader (_core_worktree) for find_root and open_repo, last value wins,
      config.worktree honoured, no interpolation; a missing directory is
@@ -515,7 +515,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      Accepted as a limitation on 2026-10-26 (a setting the user chose,
      rare; `-c diff.submodule=log` would take their display away), then
      closed the same day by the exec-path design (DESIGN-exec-path.md):
-     that `git diff` is a child git, `<exec-path>/git`, i.e. gitwary,
+     that `git diff` is a child git, `<exec-path>/git`, i.e. gitblocker,
      which refuses the planted repository as never trusted. The switch
      (`-c diff.ignoreSubmodules=dirty`), its exemption and the alias
      reading made for it are gone with it; [66] [77] [78] [86] are
@@ -526,7 +526,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      [80] is not seen and `.githooks` is not watched. Fix: read as alias.
 [91] `core.hooksPath = :(optional).githooks` (git 2.52+, local or
      global): git strips the `:(optional)` prefix of a pathname value;
-     gitwary watched `<root>/:(optional).githooks`, which does not exist.
+     gitblocker watched `<root>/:(optional).githooks`, which does not exist.
      Program keys are caught by accident (the sh split on `()`). Fix: the
      prefix stripped (once, case-sensitive, as git) from DIR_KEYS values;
      not from include.path, which git opens as written.
@@ -545,8 +545,8 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      origin).
 [94] a relative include inside an included file that is a symlink:
      git resolves it against the directory of the file as opened (the
-     link's), gitwary against the target's. The sandbox writes the file
-     git reads, gitwary watches another. Fix: included files are queued as
+     link's), gitblocker against the target's. The sandbox writes the file
+     git reads, gitblocker watches another. Fix: included files are queued as
      opened.
 [95] OPEN — variant of [44] for config: a tracked `.gitconfig` the trusted
      `.git/config` includes (`include.path = ../.gitconfig`). The sandbox
@@ -561,7 +561,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      ssh reads the file, a ProxyCommand planted there runs on `git fetch`.
      Fix: `-X<path>` yields the candidate `<path>`.
 [97] `git --bare <cmd>`: git takes the cwd as its gitdir
-     (handle_options sets GIT_DIR); gitwary took `--bare` for an inert
+     (handle_options sets GIT_DIR); gitblocker took `--bare` for an inert
      flag, discovered the repository from the cwd and checked its `.git`,
      while git read a `config` the sandbox laid out in the tree's root.
      Fix: `--bare` sets the gitdir as git does; a GIT_DIR that is no git
@@ -581,7 +581,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      on 2026-10-25 but [89] (closed on 2026-10-26, exec-path design) and
      [95] (accepted on 2026-10-27).
 [100] False positives from the inventory of git's source (tests/inventory.py,
-     2026-10-26): every name git opens under a gitdir, held to gitwary's
+     2026-10-26): every name git opens under a gitdir, held to gitblocker's
      tables by test_claims.py. Four edit buffers at the gitdir root were
      neither volatile nor read: `ADD_EDIT.patch` (`add -e`), `NOTES_EDITMSG`
      (`notes add|edit`) when the editor fails (`:cq`), `REPLACE_EDITOBJ`
@@ -616,7 +616,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      entering it inherited the judgment, `_owner_keys` being a prefix test.
      Fix: a gitfile must point to a gitdir root (`gitdir_roots`), and
      coverage is those roots ([102]).
-[104] The marker expired by the clock (`GITWARY_JUDGED_TTL`, 60 s), which
+[104] The marker expired by the clock (`GITBLOCKER_JUDGED_TTL`, 60 s), which
      changed the answer mid-command, not its cost: every submodule of a
      `clone --recurse-submodules` longer than a minute, a slow `submodule
      foreach`, `filter-branch`, `rebase --exec` were refused as never
@@ -663,18 +663,18 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      `core.hooksPath` then named `<site>/.githooks`, which nothing judged —
      [72] for children. Fix: the same gitdir with another root is another
      repository ([102]).
-[112] `GITWARY_REAL_GIT` naming gitwary itself (`<exec-path>/git` after
-     the diversion) exec'd gitwary for ever. Fix: refused.
+[112] `GITBLOCKER_REAL_GIT` naming gitblocker itself (`<exec-path>/git` after
+     the diversion) exec'd gitblocker for ever. Fix: refused.
      [101]–[112] found by the fifteenth adversarial pass (five agents,
      2026-10-26), fixed on 2026-10-27.
 [113] `init --separate-git-dir=<X>` with X a gitdir the sandbox prepared:
-     git reinitialises X and keeps its hooks and config; gitwary looked for
+     git reinitialises X and keeps its hooks and config; gitblocker looked for
      an existing repository at `<dir>/.git` only and auto-trusted X, whose
      planted pre-commit then ran. Fix: an existing `--separate-git-dir`
      target is pre-existing (no auto-trust).
 [114] A stale marker revived by pid reuse: a long-lived process left by
      the editor of `git commit` (an Emacs daemon, `code --wait`, a tmux
-     server) keeps GITWARY_JUDGED; once the pid counter wraps to the
+     server) keeps GITBLOCKER_JUDGED; once the pid counter wraps to the
      marker's pid, a git it starts (or a process in between) counts the
      marker as an ancestor's, and inherits the old judgment of a repository
      planted since. Fix: the marker names the pid and its start time; the
@@ -685,7 +685,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      rule — another root is covered when nothing the config names lies in
      its tree.
 [116] False positive: pre-commit's first use died inside `git commit`. It
-     creates its caches with `init --template=`; gitwary read the empty
+     creates its caches with `init --template=`; gitblocker read the empty
      value as a template and withheld auto-trust, and the next `remote add`
      was refused. An empty `--template=` copies no template at all, a
      configured one included. Fix: auto-trusted.
@@ -694,7 +694,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      tree, found the marker dead and judged as the user's commands: in a
      submodule (never trusted under its own key) gc was refused at every
      fetch, recorded, notified; in the judged repository after a hashed
-     change, it waited GITWARY_WAIT. Fix: a child git does not detach
+     change, it waited GITBLOCKER_WAIT. Fix: a child git does not detach
      (`--no-detach`, `gc.autoDetach=false`); the auto-gc runs before the
      command returns.
 [118] False positive: `upload-archive--writer <dir>` (started by
@@ -705,7 +705,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      app's PATH has only Apple's git, which then ran as the real one), a
      shim left stale by `brew upgrade` went unnoticed (`'submodule' is not a
      git command`), and the unwrapped warning printed a Debian command.
-     Fix: `gitwary exec-path [<dir>]` builds the shim; `trust` reports a
+     Fix: `gitblocker exec-path [<dir>]` builds the shim; `trust` reports a
      stale one; the hint fits the platform.
 [120] A child at another root inherited what the parent never hashed:
      `worktree remove ../wt` runs `git status` in the linked worktree, whose
@@ -764,7 +764,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      core.fsmonitor runs a payload) and commits a tree with a gitlink at
      `vendor/x` and a `.gitmodules` naming it, moving the branch to it:
      objects and refs are volatile, the index and the work tree carry no
-     gitlink, so gitwary's structural check (index gitlinks, `.gitmodules`
+     gitlink, so gitblocker's structural check (index gitlinks, `.gitmodules`
      on disk) sees nothing and does not refuse. `git grep
      --recurse-submodules s HEAD` reads the gitlink from the tree, finds the
      submodule active, and enters `vendor/x/.git` in-process
@@ -785,12 +785,12 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      out, `git config --unset-all submodule.active`), then disarmed on
      2026-10-30: the one thing the in-process reader executes is
      core.fsmonitor, and command-line config outranks every repository's
-     own, the one entered in-process included — gitwary appends
+     own, the one entered in-process included — gitblocker appends
      `'core.fsmonitor'='false'` to GIT_CONFIG_PARAMETERS on every git it
      runs (PINNED_CONFIG, pin_config_env; replayed on git 2.50: the hook
-     runs with the raw git, not through gitwary). A closed list held to
+     runs with the raw git, not through gitblocker). A closed list held to
      git by the in-process table of test_claims.py, not a key blocklist:
-     a reader executing anything else is a new entry. GITWARY_KEEP_FSMONITOR
+     a reader executing anything else is a new entry. GITBLOCKER_KEEP_FSMONITOR
      drops the pin for a user with a fsmonitor of their own; the warning
      moves there. Still no refusal (the xfail record stays): git reads the
      planted index and objects, and runs nothing. The warning was also
@@ -826,7 +826,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      adversarial pass, 2026-10-30. Fix: _expand2 ports interpolate_path's
      first step for pathname values and include paths (`pathname=True`);
      the prefix is asked of the real git itself (git_prefix), the one
-     thing gitwary runs git to learn — from `/`, no repository, no
+     thing gitblocker runs git to learn — from `/`, no repository, no
      user config, no GIT_* variable, no pager — since it is a constant of
      the binary nothing else knows (`%(prefix)` is not the exec path:
      /usr vs /usr/lib/git-core); no absolute answer is a refusal.
@@ -958,7 +958,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
 [140] false positive: `os.environ.get(var) or default` read an empty
      GIT_CONFIG_SYSTEM / GIT_CONFIG_GLOBAL as unset; for git an empty one
      names no file (`""` opens nothing), and a GIT_CONFIG_GLOBAL that
-     names a file replaces `~/.gitconfig` and the XDG file. gitwary
+     names a file replaces `~/.gitconfig` and the XDG file. gitblocker
      parsed files git never read ([133]'s class). Found by the eighteenth
      adversarial pass, 2026-10-31. Fix: presence, not truthiness, and
      exactly the files git picks.
@@ -985,7 +985,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      and rewritten by every commit in a: `git status` in b prompted after
      each. Worse, upload-pack and receive-pack run their children
      (`pack-objects`, `unpack-objects`) with `GIT_DIR=.` in the served
-     gitdir: the child gitwary took the gitdir for its root, resolved the
+     gitdir: the child gitblocker took the gitdir for its root, resolved the
      same token inside it, and `add` refused it as a volatile-zone path —
      `pull`, `fetch`, `push` into a working clone and `clone file://` of
      one all failed where the raw git succeeds. test_legit's remotes were
@@ -1069,7 +1069,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      `post-index-change` hook; `trust` warns on `core.splitIndex = true`.
 [149] False positive (blocking), and a way out that ran the sandbox's
      code: the nested-repository refusal ([5] [6]) named `git submodule
-     absorbgitdirs` then `gitwary trust` to keep a vendored repository,
+     absorbgitdirs` then `gitblocker trust` to keep a vendored repository,
      and refused both itself; its other way out said `git rm --cached
      <basename>`, another path for `vendor/a`. The user left with the raw
      git ran the nested repository's core.fsmonitor: `absorbgitdirs`
@@ -1079,7 +1079,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      the replay). Fix: exactly `submodule absorbgitdirs [-q] [--] [<path>…]`
      passes the nested-repository refusal, every other check applied and
      the fsmonitor pinned off (PINNED_CONFIG) — not under
-     GITWARY_KEEP_FSMONITOR; held to git in test_claims.py (absorbed with
+     GITBLOCKER_KEEP_FSMONITOR; held to git in test_claims.py (absorbed with
      the pin, a planted nested repository runs nothing; without, its
      fsmonitor runs). The message gives the paths relative to the cwd.
 [150] RCE (precondition: the user's own command or environment carries an
@@ -1118,7 +1118,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      or a lone CR between two words of an unquoted value of the user's own
      trusted config, where the path meant has a space): git counted the
      whitespace inside a value and wrote it back as spaces until 2.45,
-     and keeps it since. gitwary's parser is the newer one:
+     and keeps it since. gitblocker's parser is the newer one:
      `core.hooksPath = my<TAB>hooks` was watched as `my<TAB>hooks`, which
      does not exist, while git 2.39 ran the hooks of `my hooks`; the same
      for an `include.path`, a local remote's URL, a program quoted for
@@ -1157,10 +1157,10 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
 [154] False positive: a git run from a submodule or from a linked
      worktree died "repository never trusted" although the repository
      that holds its gitdir was trusted — `clone --recurse-submodules`
-     auto-trusted it, `gitwary trust` showed it — and every file the
+     auto-trusted it, `gitblocker trust` showed it — and every file the
      tree's own check watches was in that reference: the walk descends
      `modules/<x>` and `worktrees/<id>`, the scan reads their config
-     against their tree ([39] [68] [125]). One `gitwary trust` in each
+     against their tree ([39] [68] [125]). One `gitblocker trust` in each
      submodule and each worktree, typed blind. Found by the fourth
      agentic audit, 2026-11-03; measured 2026-11-12: the 33 entries of a
      submodule's fingerprint are in the superproject's, a linked
@@ -1182,9 +1182,9 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      `worktree add` in a row was asked about the first), and with no
      terminal — an agent's harness creating a worktree per task — a wait
      and a refusal. Found by the fourth agentic audit, 2026-11-03. Fix:
-     accepted for the command gitwary runs, not for the state found
+     accepted for the command gitblocker runs, not for the state found
      (WORKTREE_WRITES, worktree_pointers): for those four subcommands, in
-     the main repository, on a reference just found current, gitwary
+     the main repository, on a reference just found current, gitblocker
      waits for git and records the new state when what moved is that
      command's own pointers — one worktree for `add`, `move` and
      `remove` — with git's bytes (`commondir` = `../..`, `gitdir` an
@@ -1245,7 +1245,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      body on lines of its own in the rebase todo list it then runs, and
      a body that says `exec <cmd>` is a command. The sandbox commits one
      (objects and refs are volatile); `git rebase main` runs it, through
-     gitwary as with the real git alone. The todo is written and run by
+     gitblocker as with the real git alone. The todo is written and run by
      one command, nothing watched moves before it: [44]'s boundary, and
      git's own behaviour. Found by the fourth agentic audit, 2026-11-03;
      replayed 2026-11-13. Accepted (xfail record
@@ -1275,7 +1275,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      whatever its condition, as the scan does — a superset; evaluating
      git's conditions (`gitdir`, `gitdir/i`, `onbranch`,
      `hasconfig:remote.*.url`, their globbing and symlink rules) is one
-     more reader to hold to git, for one `gitwary trust` per clone.
+     more reader to hold to git, for one `gitblocker trust` per clone.
      Found by the third agentic audit, 2026-11-03; replayed 2026-11-13
      (xfail record
      test_clone_is_auto_trusted_despite_a_template_in_an_inactive_include).
@@ -1342,7 +1342,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      or `remove`, accepted in the main tree ([155]), then refused in
      every other worktree in use — a wait and a refusal for an agent
      with no terminal, the setting [155] was written for — where the
-     `gitwary restore` the refusal names deleted the pointers of the
+     `gitblocker restore` the refusal names deleted the pointers of the
      worktree just created; hooks husky generates in a worktree after
      its first git command, the bytes trusted at the same place in the
      main tree; a change of a submodule the user had answered in the
@@ -1372,7 +1372,7 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
 [167] Wrong message: a submodule or a worktree nobody trusted, whose
      holder is not in its trusted state — the `git submodule update
      --init` the user just typed moved it — was refused "never trusted …
-     Inspect .git/config and .git/hooks, then: gitwary trust": an
+     Inspect .git/config and .git/hooks, then: gitblocker trust": an
      invitation to bless the tree blind, while one command in the
      superproject asks the question and the tree then takes its trust.
      Found by the fifth agentic audit, 2026-11-23. Fix: the refusal names
@@ -1388,8 +1388,8 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      branch the user created in the submodule ([166]) and for a
      `filter.x.clean` the sandbox added there, which the `y` given out of
      habit blessed and every later `git status` of the superproject ran
-     (the child entering the submodule is covered). `gitwary diff`,
-     `gitwary pending` and the review of `gitwary trust` showed no
+     (the child entering the submodule is covered). `gitblocker diff`,
+     `gitblocker pending` and the review of `gitblocker trust` showed no
      more. Found by the fifth agentic audit, 2026-11-23. Fix:
      show_changes prints the diff of every `config` and `config.worktree`
      under a gitdir root that changed — the gitdir's, the common one, a
@@ -1403,10 +1403,10 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      directory beside the repository, or the destination itself. No hashed
      byte moves; git follows the symlink and checks the branch out (the
      sandbox's commit) in a directory of the host, `~/.vim/pack/plugins/
-     start/<name>/`; gitwary, which ran the command, said `worktree task
+     start/<name>/`; gitblocker, which ran the command, said `worktree task
      (added) → reference updated` — the id, never the path ([155]) — and
      the tree out there took the repository's trust at its first git
-     ([154]). git's own behaviour; gitwary's share was the acceptance.
+     ([154]). git's own behaviour; gitblocker's share was the acceptance.
      Found by the fifth agentic audit, 2026-11-23. Fix: refused before git
      runs when a path argument of `worktree add|move|remove|repair` goes
      through a symlink sitting in the directory that holds the main work
@@ -1417,11 +1417,11 @@ gitwary.py refer to this list (how the project reviews itself: DESIGN.md,
      target, the real path is the way out. Not seen: a symlink above that
      directory (DESIGN.md, Known limitations).
 [170] A write, then a deletion, outside the volume: the directory of a
-     worktree gitwary had accepted, swapped for a symlink to a directory
+     worktree gitblocker had accepted, swapped for a symlink to a directory
      of the host with no `.git` in it (`~/Documents`). `git worktree
      repair`, the answer to the "prunable" the swap causes, wrote a
      gitfile there and repointed the worktree to it, with no line from
-     gitwary; the question at the next command showed `modified
+     gitblocker; the question at the next command showed `modified
      worktrees/wt/gitdir`, not where it now led; answered, `~/Documents`
      was a worktree "trusted with" the repository, and `git worktree
      remove --force` — a harness cleaning up — deleted it, `(removed) →

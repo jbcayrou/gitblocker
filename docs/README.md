@@ -19,7 +19,7 @@ Layout:
 Local preview, with the Debian packages (`jekyll`, `ruby-jekyll-seo-tag`):
 
 ```sh
-cd docs && jekyll serve      # http://127.0.0.1:4000/gitwary/
+cd docs && jekyll serve      # http://127.0.0.1:4000/gitblocker/
 ```
 
 or with the `github-pages` gem: `bundle exec jekyll serve`.

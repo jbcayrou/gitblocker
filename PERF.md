@@ -1,6 +1,6 @@
 # Performance
 
-Overhead of `gitwary git <cmd>` over a plain `git <cmd>`, measured on
+Overhead of `gitblocker git <cmd>` over a plain `git <cmd>`, measured on
 2026-10-17 at commit `73b0d1c`.
 
 Re-checked on 2026-10-19 with the current code (pending decisions, real git
@@ -10,15 +10,15 @@ tables below are the original measurements.
 
 Re-checked on 2026-10-25 after the fixes of [86]–[99] (global values read
 again in each submodule, hard-link and FIFO checks, sparse directories):
-`gitwary` alone, median of 25, against the previous commit on the same
+`gitblocker` alone, median of 25, against the previous commit on the same
 machine state — 39.4 → 40.4 ms on a one-file repository, 62.5 → 64.9 ms on
 one with 10 submodules and a global config of 30 aliases and a config hook.
 
 ## Child gits (DESIGN-exec-path.md)
 
-With gitwary at git's exec path, every child git is gitwary too. On the
+With gitblocker at git's exec path, every child git is gitblocker too. On the
 Debian VM (git 2.47.3, python 3.13), a trusted one-file repository, the
-same gitwary as parent and child, median of 15 (2026-10-26):
+same gitblocker as parent and child, median of 15 (2026-10-26):
 
 | command                          | raw children | wrapped children |
 |----------------------------------|-------------:|-----------------:|
@@ -39,9 +39,9 @@ table within noise.
 ## Environment
 
 - Apple M4 Pro, macOS (Darwin 27.0), APFS
-- git 2.50.0 (Homebrew), used both directly and as `GITWARY_REAL_GIT`
-- Python 3.14 (Homebrew), gitwary.py stdlib only
-- Isolated state directory (`GITWARY_STATE`), repository trusted before
+- git 2.50.0 (Homebrew), used both directly and as `GITBLOCKER_REAL_GIT`
+- Python 3.14 (Homebrew), gitblocker.py stdlib only
+- Isolated state directory (`GITBLOCKER_STATE`), repository trusted before
   the measurements, `NO_COLOR=1`
 - Median of N runs per command (`subprocess.run` from Python, process
   start included)
@@ -51,7 +51,7 @@ table within noise.
 `git clone --depth 1` of torvalds/linux from kernel.org: 96 080 tracked
 files, 6 285 directories, ~10 MB index. N = 10.
 
-| command          | git     | gitwary git | overhead |
+| command          | git     | gitblocker git | overhead |
 |------------------|--------:|-------------:|---------:|
 | `status`         | 247 ms  | 293 ms       | +46 ms   |
 | `log -1`         |   6 ms  |  52 ms       | +46 ms   |
@@ -59,7 +59,7 @@ files, 6 285 directories, ~10 MB index. N = 10.
 | `diff --stat`    | 125 ms  | 172 ms       | +48 ms   |
 | `branch`         |   5 ms  |  50 ms       | +45 ms   |
 
-`gitwary` alone (check, no git): 49 ms.
+`gitblocker` alone (check, no git): 49 ms.
 
 Index cache invalidated (`<key>.idx` removed, i.e. right after a command
 that rewrote the 10 MB index): check at 80–90 ms instead of 45 ms, once;
@@ -69,11 +69,11 @@ kernel-like names (ten substring scans of the 2.6 MB joined names, the
 full port only on the names they flag), so ~110–120 ms once after an
 index rewrite, cached afterwards.
 
-## Small repository (gitwary itself)
+## Small repository (gitblocker itself)
 
 ~30 files. N = 15.
 
-| command          | git   | gitwary git | overhead |
+| command          | git   | gitblocker git | overhead |
 |------------------|------:|-------------:|---------:|
 | `status`         | 5 ms  | 48 ms        | +43 ms   |
 | `log -1`         | 5 ms  | 46 ms        | +40 ms   |
@@ -81,21 +81,21 @@ index rewrite, cached afterwards.
 | `diff --stat`    | 4 ms  | 45 ms        | +41 ms   |
 | `branch`         | 5 ms  | 45 ms        | +41 ms   |
 
-`gitwary` alone: 45 ms.
+`gitblocker` alone: 45 ms.
 
 ### Same on Linux (Debian 13, VM)
 
 Debian 13 aarch64 in a VM on the same machine, ext4, Python 3.13.5
-(system), git 2.47.3, system-wide install (`/usr/bin/git → gitwary`, real
+(system), git 2.47.3, system-wide install (`/usr/bin/git → gitblocker`, real
 git at `git.real`). Small repository, N = 20, 2026-10-19.
 
-| command          | git   | gitwary git | overhead |
+| command          | git   | gitblocker git | overhead |
 |------------------|------:|-------------:|---------:|
 | `status`         | 1 ms  | 27 ms        | +26 ms   |
 | `log -1`         | 0 ms  | 27 ms        | +26 ms   |
 | `rev-parse HEAD` | 0 ms  | 26 ms        | +26 ms   |
 
-`gitwary` alone: 29 ms; Python floor 16 ms. Same shape as macOS: the
+`gitblocker` alone: 29 ms; Python floor 16 ms. Same shape as macOS: the
 interpreter's startup is most of it, Linux starts it twice as fast.
 
 ## 2026-10-21: imports trimmed
@@ -108,12 +108,12 @@ dataclasses are written out. Import floor of the top-level modules 34 → 22
 ms (bare interpreter 16.5 ms).
 
 What remains, measured apart: bare interpreter 16 ms, imports 6 ms,
-**compiling gitwary.py 15 ms** — a script run by path is compiled on every
-run, only an imported module gets a cached `.pyc` —, gitwary's own work
+**compiling gitblocker.py 15 ms** — a script run by path is compiled on every
+run, only an imported module gets a cached `.pyc` —, gitblocker's own work
 ~2 ms. A two-file layout (a three-line launcher importing the module, whose
 `.pyc` is cached) measured 25.6 ms against 37.3 ms for the script, i.e.
 overhead 21 ms. `python3 -S` (no `site`) saves 5 ms on `python3 -c pass`
-but under 1 ms on a gitwary command: not worth an `env -S` shebang.
+but under 1 ms on a gitblocker command: not worth an `env -S` shebang.
 
 Re-measured on 2026-10-22, both versions head to head, small repository,
 N = 30, all five commands within 0.5 ms of each other:
@@ -123,19 +123,19 @@ N = 30, all five commands within 0.5 ms of each other:
 | macOS, M4 Pro, Python 3.14.6     | +46 ms  | +35 ms  | 15 ms             |
 | Debian 13 VM, aarch64, Python 3.13.5 | +27 ms | +20 ms | 4 ms             |
 
-`gitwary` alone: 50 → 37 ms on macOS, 30 → 22 ms on the VM.
+`gitblocker` alone: 50 → 37 ms on macOS, 30 → 22 ms on the VM.
 
 ## 2026-10-22: fixes [58]–[65]
 
-`gitwary` alone (plain check), before and after the fixes of [58]–[65],
+`gitblocker` alone (plain check), before and after the fixes of [58]–[65],
 head to head, N = 30, median; the A/B script is under "Reproducing":
 
-| machine, repository                        | before  | after   |
-|--------------------------------------------|--------:|--------:|
-| macOS, small repository (gitwary itself)  | 38.0 ms | 39.5 ms |
-| macOS, 40 shell aliases in the config      | 47.9 ms | 41.8 ms |
-| Debian VM, small repository                | 22.0 ms | 23.1 ms |
-| Debian VM, 40 shell aliases in the config  | 28.5 ms | 26.1 ms |
+| machine, repository                         | before  | after   |
+|---------------------------------------------|--------:|--------:|
+| macOS, small repository (gitblocker itself) | 38.0 ms | 39.5 ms |
+| macOS, 40 shell aliases in the config       | 47.9 ms | 41.8 ms |
+| Debian VM, small repository                 | 22.0 ms | 23.1 ms |
+| Debian VM, 40 shell aliases in the config   | 28.5 ms | 26.1 ms |
 
 The +1 ms on a small repository: a longer script to compile, the
 repository format read once more for the index (`object_id_size`, [63]),
@@ -146,16 +146,16 @@ pays for the readings.
 
 ## 2026-10-23: fixes [66]–[70], [72], [73], [75], [76]
 
-`gitwary` alone (plain check), `ca23feb` (the previous measurement) against
+`gitblocker` alone (plain check), `ca23feb` (the previous measurement) against
 `606c09e`, head to head, N = 60, median, two rounds each (the A/B script
 under "Reproducing"):
 
-| machine, repository                        | before  | after   |
-|--------------------------------------------|--------:|--------:|
-| macOS, small repository (gitwary itself)  | 40.4 ms | 41.4 ms |
-| macOS, 40 shell aliases in the config      | 42.8 ms | 43.5 ms |
-| Debian VM, small repository                | 30.0 ms | 30.7 ms |
-| Debian VM, 40 shell aliases in the config  | 29.9 ms | 30.7 ms |
+| machine, repository                         | before  | after   |
+|---------------------------------------------|--------:|--------:|
+| macOS, small repository (gitblocker itself) | 40.4 ms | 41.4 ms |
+| macOS, 40 shell aliases in the config       | 42.8 ms | 43.5 ms |
+| Debian VM, small repository                 | 30.0 ms | 30.7 ms |
+| Debian VM, 40 shell aliases in the config   | 29.9 ms | 30.7 ms |
 
 +0.7 to +1 ms. Compiling the script accounts for most of it: 153 → 164 KB,
 12.7 → 13.5 ms (macOS, median of 30 `compile()`). The rest is a handful
@@ -168,9 +168,9 @@ comparable.
 
 ## 2026-10-24: design review follow-ups ([84], [85], the default switch, ConfigScan)
 
-`gitwary` alone (plain check), `28309e3` (before the four commits of the
+`gitblocker` alone (plain check), `28309e3` (before the four commits of the
 review) against the working tree after them, head to head, N = 60,
-median, two rounds each, macOS, small repository (a clone of gitwary):
+median, two rounds each, macOS, small repository (a clone of gitblocker):
 
 | round | before  | after   |
 |-------|--------:|--------:|
@@ -200,7 +200,7 @@ Every check now looks for `objects/info/alternates` in each gitdir root
 (one failed `open` where there is none, the common case) and, where a
 repository borrows objects, hashes the mirror's `config` and `hooks/` as it
 does a local remote's. A/B of the plain check (`ab.py` below, N = 40,
-macOS, a clone of gitwary, which has one local remote):
+macOS, a clone of gitblocker, which has one local remote):
 
 |                                             | before  | after   |
 |---------------------------------------------|---------|---------|
@@ -223,7 +223,7 @@ The config reader is a port of git's parser, character by character
 every byte as git does. Plain check, macOS, an included file of 8 MB in
 a small repository (40 ms with that file empty):
 
-| the 8 MB are                      | gitwary | git (`config --get-all`) |
+| the 8 MB are                      | gitblocker | git (`config --get-all`) |
 |-----------------------------------|----------|--------------------------|
 | `key = value` lines (150 000)     | 2.85 s   | 0.06 s                   |
 | comment lines                     | 0.54 s   | 0.05 s                   |
@@ -251,7 +251,7 @@ git 2.50):
 |                    | before  | after   |
 |--------------------|---------|---------|
 | the real git alone | 2.27 s  |         |
-| behind gitwary    | 16.48 s | 16.55 s |
+| behind gitblocker  | 16.48 s | 16.55 s |
 
 +0.07 s over some 220 child gits, a third of a millisecond each. The
 14 s over the real git are those children's interpreter starts, before
@@ -262,7 +262,7 @@ as after ("Child gits" above): about seven per submodule.
 | component                                             | cost            |
 |-------------------------------------------------------|----------------:|
 | Python startup + stdlib imports (`python floor`)      | 32 ms           |
-| gitwary's own work on a small repository             | ~13 ms          |
+| gitblocker's own work on a small repository           | ~13 ms          |
 | extra on the kernel (gitdir hashing, `.idx` read)     | ~4 ms           |
 | index re-parse when the index changed (10 MB, cached) | +40 ms, once    |
 | entry-name check on that re-parse (verify_path, [55])  | +30 ms, once    |
@@ -274,7 +274,7 @@ Conclusions:
   repository size; 70 % of it is the interpreter's startup. A compiled
   rewrite would bring it to a few ms.
 - The config parser is invisible at this scale.
-- Nothing walks the work tree. An opt-in tree scan (`GITWARY_SCAN_TREE`,
+- Nothing walks the work tree. An opt-in tree scan (`GITBLOCKER_SCAN_TREE`,
   looking for undeclared nested `.git`) existed when these measurements
   were taken: +210 ms on the kernel, +165 ms of it in `readdir` (APFS
   serialises it; a C `find` was slower, 8 threads 3× slower), for an early
@@ -284,13 +284,13 @@ Conclusions:
 ## Reproducing
 
 ```python
-"""Raw git vs gitwary git on a repository. Median of N runs, ms."""
+"""Raw git vs gitblocker git on a repository. Median of N runs, ms."""
 import os, statistics, subprocess, sys, time
 repo, n = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 15
-GW = os.path.abspath("gitwary.py")
+GB = os.path.abspath("gitblocker.py")
 GIT = "/opt/homebrew/bin/git"
 state = os.path.abspath("bench-state")
-env = dict(os.environ, GITWARY_REAL_GIT=GIT, GITWARY_STATE=state, NO_COLOR="1")
+env = dict(os.environ, GITBLOCKER_REAL_GIT=GIT, GITBLOCKER_STATE=state, NO_COLOR="1")
 
 def run(cmd):
     ts = []
@@ -301,29 +301,29 @@ def run(cmd):
         assert r.returncode == 0, (cmd, r.stderr[-500:])
     return statistics.median(ts)
 
-subprocess.run([sys.executable, GW, "trust"], cwd=repo, env=env, capture_output=True, check=True)
+subprocess.run([sys.executable, GB, "trust"], cwd=repo, env=env, capture_output=True, check=True)
 cases = [("status", ["status"]), ("log -1", ["log", "-1"]), ("rev-parse HEAD", ["rev-parse", "HEAD"]),
          ("diff --stat", ["diff", "--stat"]), ("branch", ["branch"])]
-print(f"{'command':16} {'git':>10} {'gitwary git':>14} {'overhead':>10}")
+print(f"{'command':18} {'git':>10} {'gitblocker git':>14} {'overhead':>10}")
 for name, args in cases:
     raw = run([GIT, *args])
-    gw = run([sys.executable, GW, "git", *args])
-    print(f"{name:16} {raw:8.0f}ms {gw:12.0f}ms {gw - raw:+8.0f}ms")
-print(f"{'gitwary (check)':16} {'':>10} {run([sys.executable, GW]):12.0f}ms")
+    gb = run([sys.executable, GB, "git", *args])
+    print(f"{name:18} {raw:8.0f}ms {gb:12.0f}ms {gb - raw:+8.0f}ms")
+print(f"{'gitblocker (check)':18} {'':>10} {run([sys.executable, GB]):12.0f}ms")
 floor = run([sys.executable, "-c", "import difflib,hashlib,json,os,re,shlex,shutil,stat,subprocess,sys,time,dataclasses,functools,pathlib"])
-print(f"{'python floor':16} {'':>10} {floor:12.0f}ms")
+print(f"{'python floor':18} {'':>10} {floor:12.0f}ms")
 ```
 
-Run from the gitwary checkout: `python3 bench.py <repo> [N]`. A/B of two copies of the script (the "before
+Run from the gitblocker checkout: `python3 bench.py <repo> [N]`. A/B of two copies of the script (the "before
 and after" tables), from the repository to measure:
 
 ```python
-"""A/B of `gitwary` (plain check) for two copies of gitwary.py, in the cwd's
+"""A/B of `gitblocker` (plain check) for two copies of gitblocker.py, in the cwd's
 repository, isolated state. usage: ab.py old.py new.py [N]"""
 import os, statistics, subprocess, sys, tempfile, time
 old, new = sys.argv[1], sys.argv[2]
 n = int(sys.argv[3]) if len(sys.argv) > 3 else 30
-env = {**os.environ, "GITWARY_STATE": tempfile.mkdtemp(), "GITWARY_NO_NOTIFY": "1"}
+env = {**os.environ, "GITBLOCKER_STATE": tempfile.mkdtemp(), "GITBLOCKER_NO_NOTIFY": "1"}
 for name, path in [("before", old), ("after", new)] * 2:
     subprocess.run([sys.executable, path, "trust"], env=env, capture_output=True)
     ts = []
@@ -334,13 +334,13 @@ for name, path in [("before", old), ("after", new)] * 2:
     print(f"{name:7} rc={r.returncode} median {statistics.median(ts) * 1000:.1f} ms")
 ```
 
-`old.py` from `git show <commit>:gitwary.py`. A recursive clone, the
+`old.py` from `git show <commit>:gitblocker.py`. A recursive clone, the
 real git alone then behind each copy, child gits included:
 
 ```python
 """Wall time of `git clone --recurse-submodules` of a superproject with N submodules over file://: the
-real git alone, then behind each gitwary.py given, its children too (an exec path whose `git` is that
-script, as tests/conftest.py builds it). usage: clone.py <scratch dir> <N> <rounds> <label=gitwary.py>..."""
+real git alone, then behind each gitblocker.py given, its children too (an exec path whose `git` is that
+script, as tests/conftest.py builds it). usage: clone.py <scratch dir> <N> <rounds> <label=gitblocker.py>..."""
 import os, shutil, statistics, subprocess, sys, time
 from pathlib import Path
 work, n, rounds = Path(sys.argv[1]).resolve(), int(sys.argv[2]), int(sys.argv[3])
@@ -371,11 +371,11 @@ for i in range(n):
     git("submodule", "add", "-q", f"file://{s}", f"libs/s{i}", cwd=top)
 git("commit", "-qm", "top", cwd=top)
 runs = {"git": ([GIT], raw)}
-for label, gw in (a.split("=", 1) for a in sys.argv[4:]):
-    gw = os.path.abspath(gw)
-    os.chmod(gw, 0o755)      # the exec path's `git` is run by git: not executable, the children are the PATH's git
-    runs[label] = ([sys.executable, gw, "git"], {**exec_path(label, gw), "GITWARY_REAL_GIT": GIT,
-                   "GITWARY_STATE": str(work / f"state-{label}"), "GITWARY_NO_NOTIFY": "1"})
+for label, gb in (a.split("=", 1) for a in sys.argv[4:]):
+    gb = os.path.abspath(gb)
+    os.chmod(gb, 0o755)      # the exec path's `git` is run by git: not executable, the children are the PATH's git
+    runs[label] = ([sys.executable, gb, "git"], {**exec_path(label, gb), "GITBLOCKER_REAL_GIT": GIT,
+                   "GITBLOCKER_STATE": str(work / f"state-{label}"), "GITBLOCKER_NO_NOTIFY": "1"})
 times = {k: [] for k in runs}
 for _ in range(rounds):
     for label, (argv, env) in runs.items():

@@ -1,4 +1,4 @@
-"""Unit tests of gitwary.py's pure functions (no subprocess)."""
+"""Unit tests of gitblocker.py's pure functions (no subprocess)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,8 +6,8 @@ from pathlib import Path
 import os
 import pytest
 
-import gitwary as gw_mod
-from gitwary import (Entry, Refuse, _unquote, changes, parse_git_config, parse_new_repo,
+import gitblocker as gb_mod
+from gitblocker import (Entry, Refuse, _unquote, changes, parse_git_config, parse_new_repo,
                       san, split_global_options)
 
 
@@ -61,9 +61,9 @@ def test_config_last_refuses_a_value_read_two_ways(tmp_path: Path) -> None:
     words is refused: the tree would depend on the git that runs."""
     p = tmp_path / "config"
     p.write_bytes(b"[core]\n\tworktree = ../my\ttree\n\tbare = false\n")
-    with pytest.raises(gw_mod.Refuse, match="before 2.45"):
-        gw_mod.config_last(p, "core", "worktree")
-    assert gw_mod.config_last(p, "core", "bare") == "false"
+    with pytest.raises(gb_mod.Refuse, match="before 2.45"):
+        gb_mod.config_last(p, "core", "worktree")
+    assert gb_mod.config_last(p, "core", "bare") == "false"
 
 
 def test_parse_boolean_without_value(tmp_path: Path) -> None:
@@ -128,7 +128,7 @@ def test_parse_new_repo_none(args, monkeypatch, tmp_path) -> None:
     (["init", "--bare"], ".", None),
 ])
 def test_parse_new_repo_bare_sets_the_marker_without_auto_trust(args, dir, gitdir, monkeypatch, tmp_path) -> None:
-    """A bare repository is not auto-trusted (gitwary does not handle
+    """A bare repository is not auto-trusted (gitblocker does not handle
     those), but its clone's index-pack still needs the `new` marker. [101]"""
     monkeypatch.chdir(tmp_path)
     res = parse_new_repo(args)
@@ -180,7 +180,7 @@ def test_parse_new_repo_dash_C(monkeypatch, tmp_path) -> None:
     ("", False, False, None),
 ])
 def test_guess_dir_name_is_git_url_basename(url, bundle, bare, expected) -> None:
-    assert gw_mod._guess_dir_name(url, bundle, bare) == expected
+    assert gb_mod._guess_dir_name(url, bundle, bare) == expected
 
 
 # ------------------------------------------------------- split_global_options
@@ -252,23 +252,23 @@ def test_san(raw, expected) -> None:
 
 def test_san_keeps_own_colors_in_refuse() -> None:
     """An error message composed with STYLE must keep its colours."""
-    st = gw_mod.Style(True)
-    msg = "then:  " + st.cyan("gitwary trust")
-    assert str(gw_mod.Refuse(msg)) == msg
+    st = gb_mod.Style(True)
+    msg = "then:  " + st.cyan("gitblocker trust")
+    assert str(gb_mod.Refuse(msg)) == msg
 
 
 def test_style_disabled_emits_no_escape() -> None:
-    st = gw_mod.Style(False)
+    st = gb_mod.Style(False)
     assert "\x1b" not in st.red("x") + st.bold("y")
 
 
 def test_style_enabled_wraps() -> None:
-    st = gw_mod.Style(True)
+    st = gb_mod.Style(True)
     assert st.red("x") == "\x1b[31mx\x1b[0m"
 
 
 def test_refuse_sanitizes_message() -> None:
-    assert str(gw_mod.Refuse("a\x1bb")) == "a?b"
+    assert str(gb_mod.Refuse("a\x1bb")) == "a?b"
 
 
 # ------------------------------------------------------------ the judged marker
@@ -277,23 +277,23 @@ def _hex(p: str) -> str:
 
 
 def _as_parent(monkeypatch) -> None:
-    """set_judged in this process as the parent gitwary would: the marker
+    """set_judged in this process as the parent gitblocker would: the marker
     names an ancestor (pytest's parent), never the reading process."""
-    real = gw_mod.set_judged
-    monkeypatch.setattr(gw_mod, "set_judged", lambda kind, *paths: real(kind, *paths, pid=os.getppid()))
+    real = gb_mod.set_judged
+    monkeypatch.setattr(gb_mod, "set_judged", lambda kind, *paths: real(kind, *paths, pid=os.getppid()))
 
 
 def test_judged_marker_round_trip(monkeypatch) -> None:
-    monkeypatch.delenv("GITWARY_JUDGED", raising=False)
+    monkeypatch.delenv("GITBLOCKER_JUDGED", raising=False)
     _as_parent(monkeypatch)
-    assert gw_mod.read_judged() is None
-    gw_mod.set_judged("repo", "/g/.git", "/g/.git", "/g", "/g")
-    j = gw_mod.read_judged()
+    assert gb_mod.read_judged() is None
+    gb_mod.set_judged("repo", "/g/.git", "/g/.git", "/g", "/g")
+    j = gb_mod.read_judged()
     assert j.kind == "repo" and j.paths == ["/g/.git", "/g/.git", "/g", "/g"] and j.pid == os.getppid() and j.alive
-    gw_mod.set_judged("repo", "/srv/x.git", "/srv/x.git", "", "")      # served: no tree, no state
-    assert gw_mod.read_judged().paths == ["/srv/x.git", "/srv/x.git", "", ""]
-    gw_mod.set_judged("new", "/p=a:th,\N{EURO SIGN}", "/else/where")   # anything but NUL
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("repo", "/srv/x.git", "/srv/x.git", "", "")      # served: no tree, no state
+    assert gb_mod.read_judged().paths == ["/srv/x.git", "/srv/x.git", "", ""]
+    gb_mod.set_judged("new", "/p=a:th,\N{EURO SIGN}", "/else/where")   # anything but NUL
+    j = gb_mod.read_judged()
     assert j.kind == "new" and j.paths == ["/p=a:th,\N{EURO SIGN}", "/else/where"]
 
 
@@ -307,9 +307,9 @@ def test_judged_marker_round_trip(monkeypatch) -> None:
                                  f"123.4:new=", f"123.4:new={_hex('/a')},{_hex('/b')},{_hex('/c')}",
                                  "123.4:repo=zz,zz,zz", "123.4:serving"])
 def test_judged_marker_malformed_is_refused(monkeypatch, bad: str) -> None:
-    monkeypatch.setenv("GITWARY_JUDGED", bad)
-    with pytest.raises(gw_mod.Refuse):
-        gw_mod.read_judged()
+    monkeypatch.setenv("GITBLOCKER_JUDGED", bad)
+    with pytest.raises(gb_mod.Refuse):
+        gb_mod.read_judged()
 
 
 def test_judged_marker_dies_with_its_process(monkeypatch) -> None:
@@ -320,28 +320,28 @@ def test_judged_marker_dies_with_its_process(monkeypatch) -> None:
     an editor of `git commit` left behind, the counter wrapped) is not the
     process that judged; nor is the reading process itself."""
     import subprocess
-    anc = gw_mod._ancestors()
+    anc = gb_mod._ancestors()
     ppid = os.getppid()
-    start = gw_mod._proc_lineage(ppid)[1]
+    start = gb_mod._proc_lineage(ppid)[1]
     assert (ppid, start) in anc and all(p != os.getpid() for p, _ in anc)
     body = f"repo={_hex('/a')},{_hex('/a')},{_hex('/a')},{_hex('/a')}"
-    monkeypatch.setenv("GITWARY_JUDGED", f"{ppid}.{start}:{body}")
-    assert gw_mod.read_judged() is not None
-    monkeypatch.setenv("GITWARY_JUDGED", f"{ppid}.{start + 1}:{body}")
-    assert gw_mod.read_judged() is None, "the pid of an ancestor, another start time: reused"
-    me = gw_mod._proc_lineage(os.getpid())[1]
-    monkeypatch.setenv("GITWARY_JUDGED", f"{os.getpid()}.{me}:{body}")
-    assert gw_mod.read_judged() is None, "the reading process is not its own ancestor"
+    monkeypatch.setenv("GITBLOCKER_JUDGED", f"{ppid}.{start}:{body}")
+    assert gb_mod.read_judged() is not None
+    monkeypatch.setenv("GITBLOCKER_JUDGED", f"{ppid}.{start + 1}:{body}")
+    assert gb_mod.read_judged() is None, "the pid of an ancestor, another start time: reused"
+    me = gb_mod._proc_lineage(os.getpid())[1]
+    monkeypatch.setenv("GITBLOCKER_JUDGED", f"{os.getpid()}.{me}:{body}")
+    assert gb_mod.read_judged() is None, "the reading process is not its own ancestor"
     dead = subprocess.Popen(["true"]); dead.wait()
-    monkeypatch.setenv("GITWARY_JUDGED", f"{dead.pid}.0:{body}")
-    assert gw_mod.read_judged() is None
+    monkeypatch.setenv("GITBLOCKER_JUDGED", f"{dead.pid}.0:{body}")
+    assert gb_mod.read_judged() is None
     alive = subprocess.Popen(["sleep", "5"])
     try:
-        monkeypatch.setenv("GITWARY_JUDGED", f"{alive.pid}.{gw_mod._proc_lineage(alive.pid)[1]}:{body}")
-        assert gw_mod.read_judged() is None, "alive but not an ancestor"
+        monkeypatch.setenv("GITBLOCKER_JUDGED", f"{alive.pid}.{gb_mod._proc_lineage(alive.pid)[1]}:{body}")
+        assert gb_mod.read_judged() is None, "alive but not an ancestor"
     finally:
         alive.kill(); alive.wait()
-    assert not hasattr(gw_mod, "judged_ttl") and "GITWARY_JUDGED_TTL" not in open(gw_mod.__file__).read()
+    assert not hasattr(gb_mod, "judged_ttl") and "GITBLOCKER_JUDGED_TTL" not in open(gb_mod.__file__).read()
 
 
 def _layout(tmp_path: Path) -> tuple[Path, Path]:
@@ -360,8 +360,8 @@ def _layout(tmp_path: Path) -> tuple[Path, Path]:
     return root, g
 
 
-def _repo(root: Path, gitdir: Path, common: Path | None = None) -> "gw_mod.Repo":
-    return gw_mod.Repo(root, gitdir, common or gitdir, root)
+def _repo(root: Path, gitdir: Path, common: Path | None = None) -> "gb_mod.Repo":
+    return gb_mod.Repo(root, gitdir, common or gitdir, root)
 
 
 def test_judged_covers_what_the_walk_hashed(tmp_path: Path, monkeypatch) -> None:
@@ -378,8 +378,8 @@ def test_judged_covers_what_the_walk_hashed(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     _as_parent(monkeypatch)
-    gw_mod.set_judged("repo", str(g), str(g), str(root), str(root))
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("repo", str(g), str(g), str(root), str(root))
+    j = gb_mod.read_judged()
     assert j.covers(_repo(root, g))
     assert j.covers(_repo(root / "sub", g / "modules/sub"))
     assert j.covers(_repo(root / "sub/inner", g / "modules/sub/modules/inner"))
@@ -395,19 +395,19 @@ def test_judged_covers_what_the_walk_hashed(tmp_path: Path, monkeypatch) -> None
     (g / "config").unlink()
     assert not j.covers(_repo(tmp_path / "wt", g / "worktrees/wt", tmp_path / "planted")), "planted commondir"
     # judged from the worktree (its own key): its submodule is covered, the main's too (common)
-    gw_mod.set_judged("repo", str(g / "worktrees/wt"), str(g), str(tmp_path / "wt"), str(tmp_path / "wt"))
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("repo", str(g / "worktrees/wt"), str(g), str(tmp_path / "wt"), str(tmp_path / "wt"))
+    j = gb_mod.read_judged()
     assert j.covers(_repo(tmp_path / "wt/a", g / "worktrees/wt/modules/a"))
     assert j.covers(_repo(root / "sub", g / "modules/sub"))
     assert not j.covers(_repo(root / "vendor/x", g / "modules/sub/refs/p"))
     # judged from inside the submodule: its own submodule is covered, the superproject is not
-    gw_mod.set_judged("repo", str(g / "modules/sub"), str(g / "modules/sub"), str(root / "sub"), str(root / "sub"))
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("repo", str(g / "modules/sub"), str(g / "modules/sub"), str(root / "sub"), str(root / "sub"))
+    j = gb_mod.read_judged()
     assert j.covers(_repo(root / "sub/inner", g / "modules/sub/modules/inner"))
     assert not j.covers(_repo(root, g))
     # served: that gitdir exactly, in a tree where its config names nothing [121] [122]
-    gw_mod.set_judged("repo", str(g), str(g), "", "")
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("repo", str(g), str(g), "", "")
+    j = gb_mod.read_judged()
     assert j.covers(_repo(tmp_path / "whatever", g)) and not j.covers(_repo(root / "sub", g / "modules/sub"))
     (g / "config").write_text("[core]\n\thooksPath = .githooks\n")
     (tmp_path / "whatever/.githooks").mkdir(parents=True)
@@ -419,20 +419,20 @@ def test_judged_covers_what_the_walk_hashed(tmp_path: Path, monkeypatch) -> None
     for d in (new / ".git/modules/sub", new / ".git/refs/p", new / "sub/payload", sep / "modules/sub", bare):
         d.mkdir(parents=True)
         (d / "HEAD").write_text("ref: refs/heads/main\n")
-    gw_mod.set_judged("clone", str(new))
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("clone", str(new))
+    j = gb_mod.read_judged()
     assert j.covers(_repo(tmp_path, new / ".git")), "[101] index-pack: GIT_DIR=<new>/.git, cwd elsewhere"
     assert j.covers(_repo(new / "sub", new / ".git/modules/sub"))
     assert not j.covers(_repo(new / "sub", new / "sub/payload")), "[163] a gitdir of the tree"
     assert not j.covers(_repo(new / "vendor", tmp_path / "other/.git")), "[163] a tree under the new path"
     assert not j.covers(_repo(new / "sub", new / ".git/refs/p")), "a volatile zone of the new gitdir, as [103]"
     assert not j.covers(_repo(new / "sub", new / ".git/modules/sub", new / "sub/payload")), "planted commondir"
-    gw_mod.set_judged("new", str(new), str(sep))
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("new", str(new), str(sep))
+    j = gb_mod.read_judged()
     assert j.covers(_repo(new, sep)) and j.covers(_repo(new / "sub", sep / "modules/sub")), "--separate-git-dir"
     assert not j.covers(_repo(new / "sub", new / "sub/payload"))
-    gw_mod.set_judged("new", str(bare))
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("new", str(bare))
+    j = gb_mod.read_judged()
     assert j.covers(_repo(tmp_path, bare)), "--bare: the new path is the gitdir"
     assert not j.covers(_repo(bare / "x", bare / "x/.git")) and not j.covers(_repo(tmp_path / "o", tmp_path / "o/.git"))
 
@@ -465,8 +465,8 @@ def test_judged_covers_the_repositories_it_borrows_from(tmp_path: Path, monkeypa
     (m / "objects/info/alternates").write_text(f"{m2}/objects\n")
     (g / "modules/sub/objects/info").mkdir(parents=True)
     (g / "modules/sub/objects/info/alternates").write_text(f"{sm}/objects\n")
-    gw_mod.set_judged("repo", str(g), str(g), str(root), str(root))
-    j = gw_mod.read_judged()
+    gb_mod.set_judged("repo", str(g), str(g), str(root), str(root))
+    j = gb_mod.read_judged()
     assert j.covers(_repo(root, m)) and j.covers(_repo(root, m2)), "the mirror and the mirror's mirror"
     assert j.covers(_repo(root / "sub", sm)), "a submodule's mirror, entered from its tree"
     assert not j.covers(_repo(root, store)), "no refs beside the objects: git enters nothing"
@@ -482,20 +482,20 @@ def test_judged_covers_the_repositories_it_borrows_from(tmp_path: Path, monkeypa
     (m / "config").unlink()
     assert j.covers(_repo(tmp_path / "elsewhere", m))
     # served: the served repository alone, not what it borrows from
-    gw_mod.set_judged("repo", str(g), str(g), "", "")
-    assert not gw_mod.read_judged().covers(_repo(root, m))
+    gb_mod.set_judged("repo", str(g), str(g), "", "")
+    assert not gb_mod.read_judged().covers(_repo(root, m))
     # a clone in progress: what the new repository borrows from; not for an init
     new = tmp_path / "new"
     for gitdir in (new / ".git", tmp_path / "sep", tmp_path / "bare.git"):
         (gitdir / "objects/info").mkdir(parents=True)
         (gitdir / "objects/info/alternates").write_text(f"{m}/objects\n")
     for paths in ([new], [new, tmp_path / "sep"], [tmp_path / "bare.git"]):
-        gw_mod.set_judged("clone", *map(str, paths))
-        j = gw_mod.read_judged()
+        gb_mod.set_judged("clone", *map(str, paths))
+        j = gb_mod.read_judged()
         assert j.covers(_repo(tmp_path, m)) and j.covers(_repo(tmp_path, m2)), paths
         assert not j.covers(_repo(tmp_path, other)) and not j.covers(_repo(tmp_path, store)), paths
-        gw_mod.set_judged("new", *map(str, paths))
-        assert not gw_mod.read_judged().covers(_repo(tmp_path, m)), paths
+        gb_mod.set_judged("new", *map(str, paths))
+        assert not gb_mod.read_judged().covers(_repo(tmp_path, m)), paths
 
 
 def test_state_key_is_the_directory_unless_the_gitdir_is_named_apart(tmp_path: Path, monkeypatch) -> None:
@@ -503,24 +503,24 @@ def test_state_key_is_the_directory_unless_the_gitdir_is_named_apart(tmp_path: P
     gitdir — a directory, a gitfile (a linked worktree, a submodule, a
     separate gitdir), whatever names it; the pair's key for any other
     gitdir: another repository on the same tree."""
-    monkeypatch.setattr(gw_mod, "STATE", tmp_path / "state")
+    monkeypatch.setattr(gb_mod, "STATE", tmp_path / "state")
     d, wt, bare = tmp_path / "d", tmp_path / "wt", tmp_path / "dot.git"
     for p in (d / ".git/worktrees/wt", wt, bare, tmp_path / "plain"):
         p.mkdir(parents=True)
     (wt / ".git").write_text(f"gitdir: {d}/.git/worktrees/wt\n")
-    key = gw_mod.key_for
-    assert gw_mod.state_key(d, d / ".git") == key(d)
-    assert gw_mod.state_key(wt, d / ".git/worktrees/wt") == key(wt)
-    assert gw_mod.state_key(d, bare) == key(d, bare) != key(d), "another gitdir on a tree that has its own"
-    assert gw_mod.state_key(tmp_path / "plain", bare) == key(tmp_path / "plain", bare), "a tree without a .git"
-    assert gw_mod.state_key(wt, bare) == key(wt, bare), "nor the one its gitfile names"
+    key = gb_mod.key_for
+    assert gb_mod.state_key(d, d / ".git") == key(d)
+    assert gb_mod.state_key(wt, d / ".git/worktrees/wt") == key(wt)
+    assert gb_mod.state_key(d, bare) == key(d, bare) != key(d), "another gitdir on a tree that has its own"
+    assert gb_mod.state_key(tmp_path / "plain", bare) == key(tmp_path / "plain", bare), "a tree without a .git"
+    assert gb_mod.state_key(wt, bare) == key(wt, bare), "nor the one its gitfile names"
     (wt / ".git").write_text("not a gitfile\n")
-    assert gw_mod.state_key(wt, d / ".git/worktrees/wt") != key(wt), "a gitfile git dies on leads nowhere"
+    assert gb_mod.state_key(wt, d / ".git/worktrees/wt") != key(wt), "a gitfile git dies on leads nowhere"
     assert len({key(d), key(d, bare), key(bare, d), key(d, tmp_path / "other.git")}) == 4
-    r = gw_mod.Repo(d, bare, bare, d)
+    r = gb_mod.Repo(d, bare, bare, d)
     assert r.apart and r.key == key(d, bare) and r.named == str(bare)
     assert r.title == f"{d} (git dir {bare})" and r.dotgit == f"{bare} (work tree {d})"
-    r = gw_mod.Repo(d, d / ".git", d / ".git", d)
+    r = gb_mod.Repo(d, d / ".git", d / ".git", d)
     assert not r.apart and r.key == key(d) and r.named is None
     assert r.title == str(d) and r.dotgit == f"{d}/.git"
 
@@ -538,7 +538,7 @@ def test_state_key_is_the_directory_unless_the_gitdir_is_named_apart(tmp_path: P
 def test_alternates_entries(text: bytes, want: list[bytes]) -> None:
     """[156] parse_alt_odb_entry, entry by entry (the parity test asks git
     where it goes for the same bytes: test_git_parity.py)."""
-    assert gw_mod._alternates_entries(text) == want
+    assert gb_mod._alternates_entries(text) == want
 
 
 # ------------------------------------------------------------ walk_gitdir filter
@@ -551,7 +551,7 @@ def test_walk_gitdir_excludes_volatile(tmp_path: Path) -> None:
               "rebase-merge/x", "BISECT_LOG", "foo.lock", "config.lock", "index.lock",
               "hooks/pre-commit.lock", "myhooks"]:
         (g / f).write_text("x")
-    paths = sorted(e.path for e in gw_mod.walk_gitdir(g, "local"))
+    paths = sorted(e.path for e in gb_mod.walk_gitdir(g, "local"))
     # A `.lock` is volatile only beside a file git locks there ([144]):
     # `config.lock`, `index.lock` vanish, `foo.lock` and a hook's do not.
     assert paths == ["config", "description", "foo.lock", "hooks/pre-commit",
@@ -571,13 +571,13 @@ def test_walk_gitdir_anchors_roots_under_modules_only(tmp_path: Path) -> None:
               "worktrees/wt/HEAD", "worktrees/wt/commondir", "worktrees/wt/logs/HEAD"]:
         (g / f).parent.mkdir(parents=True, exist_ok=True)
         (g / f).write_text("x")
-    paths = sorted(e.path for e in gw_mod.walk_gitdir(g, "local"))
+    paths = sorted(e.path for e in gb_mod.walk_gitdir(g, "local"))
     assert paths == ["config", "hooks/HEAD", "hooks/index", "hooks/refs/x",
                      "modules/lib/foo/config", "worktrees/wt/commondir"]
-    assert gw_mod.gitdir_excluded(g / "modules/lib/foo/info/refs", g)
-    assert gw_mod.gitdir_excluded(g / "modules/lib/foo/refs/x", g)
-    assert not gw_mod.gitdir_excluded(g / "hooks/refs/x", g)
-    assert not gw_mod.gitdir_excluded(g / "modules/lib/foo/config", g)
+    assert gb_mod.gitdir_excluded(g / "modules/lib/foo/info/refs", g)
+    assert gb_mod.gitdir_excluded(g / "modules/lib/foo/refs/x", g)
+    assert not gb_mod.gitdir_excluded(g / "hooks/refs/x", g)
+    assert not gb_mod.gitdir_excluded(g / "modules/lib/foo/config", g)
 
 
 def test_notes_merge_names_are_volatile_where_git_writes_them(tmp_path: Path) -> None:
@@ -599,18 +599,18 @@ def test_notes_merge_names_are_volatile_where_git_writes_them(tmp_path: Path) ->
         (g / f).write_text("x")
     link = f"NOTES_MERGE_WORKTREE/{'c' * 40}"
     (g / link).symlink_to(tmp_path / "elsewhere")
-    paths = sorted(e.path for e in gw_mod.walk_gitdir(g, "local"))
+    paths = sorted(e.path for e in gb_mod.walk_gitdir(g, "local"))
     assert paths == sorted([*watched, link])
     for f in volatile:
-        assert gw_mod.gitdir_excluded(g / f, g), f
+        assert gb_mod.gitdir_excluded(g / f, g), f
     for f in [*watched, link]:
-        assert not gw_mod.gitdir_excluded(g / f, g), f
+        assert not gb_mod.gitdir_excluded(g / f, g), f
 
 
 def test_walk_error_ignores_vanished_dir_but_refuses_permission() -> None:
-    gw_mod._walk_error(FileNotFoundError(2, "No such file or directory", "/x"))
-    with pytest.raises(gw_mod.Refuse):
-        gw_mod._walk_error(PermissionError(13, "Permission denied", "/x"))
+    gb_mod._walk_error(FileNotFoundError(2, "No such file or directory", "/x"))
+    with pytest.raises(gb_mod.Refuse):
+        gb_mod._walk_error(PermissionError(13, "Permission denied", "/x"))
 
 
 # --------------------------------------------------------------- index_gitlinks
@@ -635,20 +635,20 @@ def _ext(sig: bytes, data: bytes = b"") -> bytes:
 def test_index_sparse_directories_and_extensions(tmp_path: Path) -> None:
     """[87] a sparse directory (mode 040000, `sdir`) is returned for the
     caller to look on disk; an optional extension (uppercase signature) is
-    skipped, a required one gitwary does not know is refused as git dies
+    skipped, a required one gitblocker does not know is refused as git dies
     on it, `link` (split index) too."""
     idx = tmp_path / "index"
     idx.write_bytes(_index_v2([(0o100644, b"src/a"), (0o040000, b"vendor/")],
                               _ext(b"TREE", b"xx") + _ext(b"sdir")))
-    assert gw_mod.index_entries(idx) == ([], ["vendor/"])
+    assert gb_mod.index_entries(idx) == ([], ["vendor/"])
     idx.write_bytes(_index_v2([(0o160000, b"v")], _ext(b"UNTR", b"abc") + _ext(b"EOIE", b"x" * 24)))
-    assert gw_mod.index_entries(idx) == (["v"], [])
+    assert gb_mod.index_entries(idx) == (["v"], [])
     idx.write_bytes(_index_v2([(0o160000, b"v")], _ext(b"zzzz")))
     with pytest.raises(Refuse, match="does not know"):
-        gw_mod.index_entries(idx)
+        gb_mod.index_entries(idx)
     idx.write_bytes(_index_v2([(0o160000, b"v")], _ext(b"link", b"\0" * 20)))
     with pytest.raises(Refuse, match="splitIndex"):
-        gw_mod.index_entries(idx)
+        gb_mod.index_entries(idx)
 
 
 def test_index_nested_walks_a_sparse_directory_on_disk(tmp_path: Path) -> None:
@@ -657,7 +657,7 @@ def test_index_nested_walks_a_sparse_directory_on_disk(tmp_path: Path) -> None:
     (tmp_path / "vendor/a/evil/.git/x/.git").mkdir(parents=True)
     (tmp_path / "vendor/b").mkdir()
     (tmp_path / "vendor/b/.git").write_text("gitdir: ../../.git/modules/b\n")
-    got = gw_mod.index_nested(tmp_path, [], ["vendor/", "absent/"])
+    got = gb_mod.index_nested(tmp_path, [], ["vendor/", "absent/"])
     assert got == {tmp_path / "vendor/a/evil/.git", tmp_path / "vendor/b/.git"}
 
 
@@ -673,7 +673,7 @@ def test_index_nested_walks_a_sparse_directory_on_disk(tmp_path: Path) -> None:
 ])
 def test_index_gitlinks_minimal_index(tmp_path: Path, entries, expected) -> None:
     (tmp_path / "index").write_bytes(_index_v2(entries))
-    assert gw_mod.index_gitlinks(tmp_path / "index") == expected
+    assert gb_mod.index_gitlinks(tmp_path / "index") == expected
 
 
 def test_index_gitlinks_cache(tmp_path: Path) -> None:
@@ -685,35 +685,35 @@ def test_index_gitlinks_cache(tmp_path: Path) -> None:
     cache = tmp_path / "state" / "k.idx"
     cache.parent.mkdir()
     idx.write_bytes(_index_v2([(0o100644, b"f"), (0o160000, b"vendor")]))
-    assert gw_mod.index_gitlinks(idx, cache) == ["vendor"]
+    assert gb_mod.index_gitlinks(idx, cache) == ["vendor"]
     c = json.loads(cache.read_text())
     rec = c["indexes"][str(idx)]
-    assert c["v"] == gw_mod.INDEX_CACHE_VERSION
+    assert c["v"] == gb_mod.INDEX_CACHE_VERSION
     assert rec["gitlinks"] == ["vendor"] and len(rec["sha256"]) == 64
-    def put(gitlinks, sha=rec["sha256"], v=gw_mod.INDEX_CACHE_VERSION):
+    def put(gitlinks, sha=rec["sha256"], v=gb_mod.INDEX_CACHE_VERSION):
         cache.write_text(json.dumps({"v": v, "indexes": {str(idx): {"sha256": sha,
                                                                     "gitlinks": gitlinks,
                                                                     "sparse": []}}}))
     # Consistent cache: reused as is (we tamper with it to prove it).
     put(["from-cache"])
-    assert gw_mod.index_gitlinks(idx, cache) == ["from-cache"]
+    assert gb_mod.index_gitlinks(idx, cache) == ["from-cache"]
     # Version 1 (flat, no name check) is ignored, even with the right sha256.
     cache.write_text(json.dumps({"sha256": rec["sha256"], "gitlinks": ["v1"]}))
-    assert gw_mod.index_gitlinks(idx, cache) == ["vendor"]
+    assert gb_mod.index_gitlinks(idx, cache) == ["vendor"]
     put(["old"], v=1)
-    assert gw_mod.index_gitlinks(idx, cache) == ["vendor"]
+    assert gb_mod.index_gitlinks(idx, cache) == ["vendor"]
     put(["old"], v=2)                           # before [87]: no sparse directories
-    assert gw_mod.index_gitlinks(idx, cache) == ["vendor"]
+    assert gb_mod.index_gitlinks(idx, cache) == ["vendor"]
     # Modified index: the cache no longer matches, re-parsed and rewritten.
     idx.write_bytes(_index_v2([(0o100644, b"f"), (0o160000, b"other")]))
-    assert gw_mod.index_gitlinks(idx, cache) == ["other"]
+    assert gb_mod.index_gitlinks(idx, cache) == ["other"]
     rec = json.loads(cache.read_text())["indexes"][str(idx)]
     assert rec["gitlinks"] == ["other"]
     # A second index file gets its own record, the first one is kept.
     idx2 = tmp_path / "sub" / "index"
     idx2.parent.mkdir()
     idx2.write_bytes(_index_v2([(0o160000, b"nested")]))
-    assert gw_mod.index_gitlinks(idx2, cache) == ["nested"]
+    assert gb_mod.index_gitlinks(idx2, cache) == ["nested"]
     assert set(json.loads(cache.read_text())["indexes"]) == {str(idx), str(idx2)}
     # Corrupt or malformed cache: ignored.
     for bad in ("{", "[]", json.dumps({"v": 2, "indexes": []}),
@@ -721,23 +721,23 @@ def test_index_gitlinks_cache(tmp_path: Path) -> None:
                 json.dumps({"v": 2, "indexes": {str(idx): {"sha256": rec["sha256"],
                                                            "gitlinks": "a"}}})):
         cache.write_text(bad)
-        assert gw_mod.index_gitlinks(idx, cache) == ["other"]
+        assert gb_mod.index_gitlinks(idx, cache) == ["other"]
     # Parser refusal: nothing is written.
     cache.unlink()
     forged = bytearray(_index_v2([(0o160000, b"vendor")]))
     forged[72:74] = (3).to_bytes(2, "big")          # namelen 3 != real NUL at 6
     idx.write_bytes(bytes(forged))
     with pytest.raises(Refuse):
-        gw_mod.index_gitlinks(idx, cache)
+        gb_mod.index_gitlinks(idx, cache)
     assert not cache.exists()
     # Forged name: refused, nothing cached. [55]
     idx.write_bytes(_index_v2([(0o100644, b".git/hooks/post-checkout")]))
     with pytest.raises(Refuse, match="forged git index"):
-        gw_mod.index_gitlinks(idx, cache)
+        gb_mod.index_gitlinks(idx, cache)
     assert not cache.exists()
     # Missing state directory: no error, correct result.
     idx.write_bytes(_index_v2([(0o160000, b"v")]))
-    assert gw_mod.index_gitlinks(tmp_path / "index", tmp_path / "nope" / "k.idx") == ["v"]
+    assert gb_mod.index_gitlinks(tmp_path / "index", tmp_path / "nope" / "k.idx") == ["v"]
 
 
 # ------------------------------------------------------- branch_tracking_only
@@ -790,7 +790,7 @@ HTTPS = [("remote.up", "url", "https://example.invalid/o/r.git"),
     (BASE, BASE + [("remote.up", "url", "https://h/r\x1b[2J")], []),
 ])
 def test_branch_tracking_only(old, new, expected) -> None:
-    assert gw_mod.branch_tracking_only(old, new) == expected
+    assert gb_mod.branch_tracking_only(old, new) == expected
 
 
 # ------------------------------------------- pass 8: global options, display
@@ -812,7 +812,7 @@ def test_split_global_options_separate_argument(opt) -> None:
 
 
 def test_split_global_options_unknown_option_refused() -> None:
-    """[40] an option gitwary does not know may take an argument: refuse
+    """[40] an option gitblocker does not know may take an argument: refuse
     rather than guess (git refuses unknown options too)"""
     with pytest.raises(Refuse):
         split_global_options(["--frobnicate", "x", "-C", "repo", "status"], Path("/w"))
@@ -826,7 +826,7 @@ def test_split_global_options_unknown_option_refused() -> None:
 ])
 def test_san_neutralizes_hiding_sgr(raw) -> None:
     """[43] an SGR sequence from a file (config diff shown before [y/N]) could
-    hide the rest of the line; only gitwary's own codes are kept"""
+    hide the rest of the line; only gitblocker's own codes are kept"""
     assert "\x1b" not in san(raw).replace("\x1b[0m", "")
 
 
@@ -835,21 +835,21 @@ def test_real_git_skips_itself(tmp_path: Path, monkeypatch) -> None:
     import os
     me = tmp_path / "me"
     me.mkdir()
-    os.symlink(Path(gw_mod.__file__).resolve(), me / "git")
+    os.symlink(Path(gb_mod.__file__).resolve(), me / "git")
     other = tmp_path / "other"
     other.mkdir()
     (other / "git").write_text("#!/bin/sh\n")
     (other / "git").chmod(0o755)
     (tmp_path / "notexec").mkdir()
     (tmp_path / "notexec/git").write_text("")
-    monkeypatch.delenv("GITWARY_REAL_GIT", raising=False)
+    monkeypatch.delenv("GITBLOCKER_REAL_GIT", raising=False)
     monkeypatch.setenv("PATH", os.pathsep.join([str(me), str(tmp_path / "notexec"), str(other)]))
-    assert gw_mod.real_git() == str(other / "git")
+    assert gb_mod.real_git() == str(other / "git")
     monkeypatch.setenv("PATH", str(me))
     with pytest.raises(Refuse):
-        gw_mod.real_git()
-    monkeypatch.setenv("GITWARY_REAL_GIT", "/x/git")
-    assert gw_mod.real_git() == "/x/git"
+        gb_mod.real_git()
+    monkeypatch.setenv("GITBLOCKER_REAL_GIT", "/x/git")
+    assert gb_mod.real_git() == "/x/git"
 
 
 # ------------------------------------------------------------------ pending
@@ -858,14 +858,14 @@ def test_notify_pending_calls_once_with_sanitized_text(monkeypatch, tmp_path: Pa
     import sys
     calls = []
     monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-    monkeypatch.setattr(gw_mod, "NOTIFY_SEND", sys.executable)        # "exists": that branch is taken
-    monkeypatch.delenv("GITWARY_NO_NOTIFY", raising=False)
-    gw_mod.notify_pending(Path("/r/\x1b[2Kevil"), "x" * 500)
+    monkeypatch.setattr(gb_mod, "NOTIFY_SEND", sys.executable)        # "exists": that branch is taken
+    monkeypatch.delenv("GITBLOCKER_NO_NOTIFY", raising=False)
+    gb_mod.notify_pending(Path("/r/\x1b[2Kevil"), "x" * 500)
     assert len(calls) == 1 and calls[0][0] == sys.executable
     body = calls[0][-1]
     assert "\x1b" not in body and len(body) <= 200
-    monkeypatch.setenv("GITWARY_NO_NOTIFY", "1")
-    gw_mod.notify_pending(Path("/r"), "y")
+    monkeypatch.setenv("GITBLOCKER_NO_NOTIFY", "1")
+    gb_mod.notify_pending(Path("/r"), "y")
     assert len(calls) == 1
 
 
@@ -876,80 +876,80 @@ def test_notify_pending_swallows_failures(monkeypatch) -> None:
     def boom(*a, **k):
         raise OSError("no bus")
     monkeypatch.setattr(subprocess, "run", boom)
-    monkeypatch.setattr(gw_mod, "NOTIFY_SEND", sys.executable)
-    monkeypatch.delenv("GITWARY_NO_NOTIFY", raising=False)
-    gw_mod.notify_pending(Path("/r"), "y")          # no exception
+    monkeypatch.setattr(gb_mod, "NOTIFY_SEND", sys.executable)
+    monkeypatch.delenv("GITBLOCKER_NO_NOTIFY", raising=False)
+    gb_mod.notify_pending(Path("/r"), "y")          # no exception
 
 
 def test_record_pending_notifies_once_per_cooldown(monkeypatch, tmp_path: Path) -> None:
     sent = []
-    monkeypatch.setattr(gw_mod, "STATE", tmp_path / "state")
-    monkeypatch.setattr(gw_mod, "notify_pending", lambda label, text: sent.append(text))
-    key = gw_mod.key_for(Path("/some/repo"))
-    gw_mod.record_pending(key, "never", Path("/some/repo"), "never trusted")
-    gw_mod.record_pending(key, "never", Path("/some/repo"), "never trusted")
+    monkeypatch.setattr(gb_mod, "STATE", tmp_path / "state")
+    monkeypatch.setattr(gb_mod, "notify_pending", lambda label, text: sent.append(text))
+    key = gb_mod.key_for(Path("/some/repo"))
+    gb_mod.record_pending(key, "never", Path("/some/repo"), "never trusted")
+    gb_mod.record_pending(key, "never", Path("/some/repo"), "never trusted")
     assert len(sent) == 1
-    d = gw_mod.load_pending(key)
-    d["notified"] -= gw_mod.NOTIFY_COOLDOWN + 1
-    gw_mod.update_pending(key, lambda cur: d)
-    gw_mod.record_pending(key, "never", Path("/some/repo"), "never trusted")
+    d = gb_mod.load_pending(key)
+    d["notified"] -= gb_mod.NOTIFY_COOLDOWN + 1
+    gb_mod.update_pending(key, lambda cur: d)
+    gb_mod.record_pending(key, "never", Path("/some/repo"), "never trusted")
     assert len(sent) == 2
     assert (tmp_path / "state").stat().st_mode & 0o777 == 0o700
 
 
 def test_update_pending_is_atomic_under_concurrency(monkeypatch, tmp_path: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor
-    monkeypatch.setattr(gw_mod, "STATE", tmp_path / "state")
-    key = gw_mod.key_for(Path("/some/repo"))
-    gw_mod.update_pending(key, lambda cur: {"root": "/some/repo", "kind": "changed", "waiters": []})
+    monkeypatch.setattr(gb_mod, "STATE", tmp_path / "state")
+    key = gb_mod.key_for(Path("/some/repo"))
+    gb_mod.update_pending(key, lambda cur: {"root": "/some/repo", "kind": "changed", "waiters": []})
 
     def add(i: int) -> None:
         def fn(cur):
             cur["waiters"].append({"pid": i})
             return cur
-        gw_mod.update_pending(key, fn)
+        gb_mod.update_pending(key, fn)
     with ThreadPoolExecutor(8) as ex:
         list(ex.map(add, range(200)))
-    assert len(gw_mod.load_pending(key)["waiters"]) == 200
+    assert len(gb_mod.load_pending(key)["waiters"]) == 200
 
 
 def test_caller_chain_starts_with_our_parent() -> None:
     import os
-    chain = gw_mod.caller_chain()
+    chain = gb_mod.caller_chain()
     assert chain and chain[0]["pid"] == os.getppid()
     assert all(set(c) == {"pid", "name", "args"} for c in chain)
 
 
 def test_wait_seconds(monkeypatch) -> None:
-    monkeypatch.delenv("GITWARY_WAIT", raising=False)
-    assert gw_mod.wait_seconds() == gw_mod.WAIT_DEFAULT
-    monkeypatch.setenv("GITWARY_WAIT", "2.5")
-    assert gw_mod.wait_seconds() == 2.5
-    monkeypatch.setenv("GITWARY_WAIT", "-1")
+    monkeypatch.delenv("GITBLOCKER_WAIT", raising=False)
+    assert gb_mod.wait_seconds() == gb_mod.WAIT_DEFAULT
+    monkeypatch.setenv("GITBLOCKER_WAIT", "2.5")
+    assert gb_mod.wait_seconds() == 2.5
+    monkeypatch.setenv("GITBLOCKER_WAIT", "-1")
     with pytest.raises(Refuse):
-        gw_mod.wait_seconds()
-    monkeypatch.setenv("GITWARY_WAIT", "soon")
+        gb_mod.wait_seconds()
+    monkeypatch.setenv("GITBLOCKER_WAIT", "soon")
     with pytest.raises(Refuse):
-        gw_mod.wait_seconds()
+        gb_mod.wait_seconds()
 
 
 # ------------------------------------------------------------- state directory
 def test_state_dir_order(monkeypatch, tmp_path: Path) -> None:
-    """GITWARY_STATE, else an absolute XDG_STATE_HOME, else ~/.local/state;
+    """GITBLOCKER_STATE, else an absolute XDG_STATE_HOME, else ~/.local/state;
     a relative XDG_STATE_HOME is invalid per the spec and ignored."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("GITWARY_STATE", raising=False)
+    monkeypatch.delenv("GITBLOCKER_STATE", raising=False)
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-    assert gw_mod.state_dir() == tmp_path / ".local/state/gitwary"
+    assert gb_mod.state_dir() == tmp_path / ".local/state/gitblocker"
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
-    assert gw_mod.state_dir() == tmp_path / "xdg/gitwary"
+    assert gb_mod.state_dir() == tmp_path / "xdg/gitblocker"
     monkeypatch.setenv("XDG_STATE_HOME", "relative/state")
-    assert gw_mod.state_dir() == tmp_path / ".local/state/gitwary"
+    assert gb_mod.state_dir() == tmp_path / ".local/state/gitblocker"
     monkeypatch.setenv("XDG_STATE_HOME", "")
-    assert gw_mod.state_dir() == tmp_path / ".local/state/gitwary"
+    assert gb_mod.state_dir() == tmp_path / ".local/state/gitblocker"
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setenv("GITWARY_STATE", str(tmp_path / "explicit"))
-    assert gw_mod.state_dir() == tmp_path / "explicit"
+    monkeypatch.setenv("GITBLOCKER_STATE", str(tmp_path / "explicit"))
+    assert gb_mod.state_dir() == tmp_path / "explicit"
 
 
 # ------------------------------------------------------------ aliases [66]
@@ -972,7 +972,7 @@ def test_state_dir_order(monkeypatch, tmp_path: Path) -> None:
 def test_alias_command(value: str, word: str | None) -> None:
     """The command word of _alias_parts: the oracle of its split and of the
     options it skips, so that the `-c` pairs land where git reads them. [80]"""
-    assert gw_mod._alias_parts(value)[0] == word
+    assert gb_mod._alias_parts(value)[0] == word
 
 
 @pytest.mark.parametrize("value, words", [
@@ -982,7 +982,7 @@ def test_alias_command(value: str, word: str | None) -> None:
     ("'a", None), ("a\\", None),
 ])
 def test_split_cmdline(value: str, words: list | None) -> None:
-    assert gw_mod._split_cmdline(value) == words
+    assert gb_mod._split_cmdline(value) == words
 
 
 @pytest.mark.parametrize("value, command, pairs", [
@@ -1001,7 +1001,7 @@ def test_split_cmdline(value: str, words: list | None) -> None:
 def test_alias_parts(monkeypatch, value: str, command: str | None, pairs: list) -> None:
     monkeypatch.setenv("HOME", "/home/user")
     monkeypatch.delenv("NO_SUCH_VAR_X", raising=False)
-    assert gw_mod._alias_parts(value) == (command, pairs)
+    assert gb_mod._alias_parts(value) == (command, pairs)
 
 
 @pytest.mark.parametrize("tok, want", [
@@ -1016,7 +1016,7 @@ def test_alias_parts(monkeypatch, value: str, command: str | None, pairs: list) 
 def test_glued_values(tok: str, want: set[str]) -> None:
     """[96] a short-option word yields its possible glued values, one after
     each letter of its leading run, never one per character."""
-    assert gw_mod._glued_values({tok}) - {tok} == want
+    assert gb_mod._glued_values({tok}) - {tok} == want
 
 
 def test_hash_file_of_a_vanished_path_is_none(tmp_path: Path) -> None:
@@ -1024,7 +1024,7 @@ def test_hash_file_of_a_vanished_path_is_none(tmp_path: Path) -> None:
     a rebase finishing) holds nothing git could run: skipped, as
     _walk_error skips a vanished directory; it raised FileNotFoundError
     out of `trust`."""
-    assert gw_mod._hash_file(tmp_path / "gone") is None
+    assert gb_mod._hash_file(tmp_path / "gone") is None
     gone = tmp_path / "gone-link"
     gone.symlink_to(tmp_path / "nowhere")
-    assert gw_mod._hash_file(gone) is not None            # a dangling link is still a link
+    assert gb_mod._hash_file(gone) is not None            # a dangling link is still a link

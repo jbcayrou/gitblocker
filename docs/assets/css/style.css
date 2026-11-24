@@ -1,6 +1,6 @@
 /* Layout: one left-aligned reading column of ~62ch on cool paper; terminals are the only objects with edges.
-   Section dividers reuse the 56-char rule gitwary prints. Logo palette (navy to teal) sets ink and accent;
-   red, amber, green are gitwary's own status colours, never decoration. */
+   Section dividers reuse the 56-char rule gitblocker prints. Logo palette (navy to teal) sets ink and accent;
+   red, amber, green are gitblocker's own status colours, never decoration. */
 :root{
   --paper:#F3F5F4; --ink:#15222E; --muted:#5B6974; --rule:#C9D1D0;
   --navy:#1C3B5D; --teal:#227F7D; --term:#FBFCFB;
