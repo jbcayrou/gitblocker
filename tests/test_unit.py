@@ -516,6 +516,10 @@ def test_state_key_is_the_directory_unless_the_gitdir_is_named_apart(tmp_path: P
     assert gb_mod.state_key(wt, bare) == key(wt, bare), "nor the one its gitfile names"
     (wt / ".git").write_text("not a gitfile\n")
     assert gb_mod.state_key(wt, d / ".git/worktrees/wt") != key(wt), "a gitfile git dies on leads nowhere"
+    link = tmp_path / "linked"
+    link.mkdir()
+    os.symlink(bare, link / ".git")
+    assert gb_mod.state_key(link, bare) == key(link, bare), "[178] a symlinked .git is not the tree's own gitdir"
     assert len({key(d), key(d, bare), key(bare, d), key(d, tmp_path / "other.git")}) == 4
     r = gb_mod.Repo(d, bare, bare, d)
     assert r.apart and r.key == key(d, bare) and r.named == str(bare)

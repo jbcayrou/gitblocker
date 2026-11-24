@@ -139,7 +139,7 @@ are honoured as git honours them.
 | the check pipeline (scan → structure → fingerprint) | `inspect`, `Inspection`, `save_trust` | Organization of gitblocker.py |
 | config parser | `_Src`, `_parse_value`, `parse_git_config` | same, "Config files parsed" |
 | output, colours, `san` | `san`, `Style`, `set_output` | Display and sanitization |
-| state files, keys, locking; a gitdir named apart from its tree (GIT_DIR: vcsh, dotfiles) is half of the key and of the records ([157]) | `save_trust`, `load_manifest`, `update_pending`, `state_key`, `gitdir_apart`, `Repo.key`/`title`/`dotgit`, `open_record`, `records_at` | Storage; What the script checks, 1 |
+| state files, keys, locking; a gitdir named apart from its tree (GIT_DIR: vcsh, dotfiles) is half of the key and of the records ([157]); a reference is the gitdir's it was taken from, nothing compared with or restored into another ([178]) | `save_trust`, `load_manifest`, `update_pending`, `state_key`, `gitdir_apart`, `moved_from`, `Repo.key`/`title`/`dotgit`, `open_record`, `records_at` | Storage; What the script checks, 1 |
 | a submodule, a linked worktree trusted with the repository holding its gitdir, again when its reference no longer matches; what its refusal says of that repository | `trust_holder`, `_holder`, `holder_unsettled`, `REPO_ENV` | Trusted with the repository that holds the gitdir |
 | the pointers of a `git worktree` command gitblocker ran, one command at a time; its path arguments refused through a planted symlink | `WORKTREE_WRITES`, `worktree_pointers`, `accept_worktree_pointers`, `worktree_lock`, `WORKTREE_PATHS`, `worktree_path_args`, `check_worktree_paths`, `run_git` | Exec-mode shortcuts |
 | exec mode: options, clone/init, prompt, pending | `split_global_options`, `parse_new_repo`, `check_or_die`, `ask_on_tty`, `wait_for_decision` | Auto-trust; Exec-mode shortcuts |
@@ -151,7 +151,7 @@ are honoured as git honours them.
 
 ## Tests
 
-`python3 -m pytest` (~1830 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], the accepted limitations; ~410 s), before
+`python3 -m pytest` (~1840 tests, expected failures: [44], [71], [74], [95], [123], [126], [129], [158], [160], [161], the accepted limitations; ~410 s), before
 any change. pytest is not on the system python: `python3 -m venv <scratch>/venv
 && venv/bin/pip install pytest`.
 

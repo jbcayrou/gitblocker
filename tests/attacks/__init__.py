@@ -1518,6 +1518,32 @@ gitblocker.py refer to this list (how the project reviews itself: DESIGN.md,
      the child — robust by construction, but git dies "could not recurse
      into submodule" after moving the first gitdir, and a repository
      nested in the vendored one became a refusal with no way out.
+[178] A write outside the volume, by the user's hand: `gitblocker restore`
+     put one repository's backup into another one's gitdir. The sandbox
+     replaces `<repo>/.git` by a gitfile naming a repository of the user's
+     it cannot write (its path read in a `worktrees/*/gitdir`, a local
+     remote, or guessed: `~/.password-store/.git`). git run in `<repo>`
+     works on that one; the check compared it with `<repo>`'s reference —
+     "<repo>/.git has changed since the last trust", the other
+     repository's config as the diff — and named `gitblocker restore`,
+     whose plan said "Actions on <repo>: restore config, delete
+     hooks/pre-push" and which copied `<repo>`'s backed-up config over
+     the other one's and deleted its hook. The same through a linked
+     worktree's `commondir`; and, for a gitdir named apart ([157]), with
+     `<tree>/.git` made a symlink to it: "is this the tree's own gitdir?"
+     followed the symlink, the pair took the directory's key, and
+     `restore` wrote the tree's own backup into the dotfiles gitdir. No
+     code runs; the reference written is the user's own, plus what was
+     auto-accepted into it. Found by the fifth agentic audit, 2026-11-23.
+     Fix: a reference records the gitdir and the common dir it was taken
+     from (moved_from); opened elsewhere, the repository is compared with
+     nothing and restored into nothing — the refusal says so, with both
+     directories; `trust` says it and records the new one. A gitdir the
+     user moved (`init --separate-git-dir`) is trusted again by hand, one
+     that moved under a holder (`submodule absorbgitdirs`) takes the
+     holder's trust. gitdir_apart does not follow a symlink at
+     `<tree>/.git`. A reference written before takes its gitdir at the
+     first command that finds the repository in its trusted state.
 """
 from __future__ import annotations
 

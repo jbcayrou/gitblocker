@@ -468,7 +468,7 @@ repository using that directory.
 | `gitblocker` | Check the current repository. Exit 1 if suspect or never trusted. |
 | `gitblocker trust` | Record the current state as the reference, with a backup of the watched files. Shows the diff first if the repository changed. |
 | `gitblocker diff` | Show what differs from the reference. |
-| `gitblocker restore [-y]` | Put the watched files back into the reference state. |
+| `gitblocker restore [-y]` | Put the watched files back into the reference state. Refused when `.git` no longer leads to the git directory that state was taken from: nothing is written into another repository. |
 | `gitblocker git <args>` | Check, then run the real git. Honours `-C`, `--git-dir`, `--work-tree`, `-c`. |
 | `gitblocker list` | Registered repositories and their status (ok / modified / structure / missing / legacy / unknown). |
 | `gitblocker pending [<repo>… \| -a \| -c <repo>…]` | Decisions waiting for a git blocked by a program: list, review and allow/refuse, or clear. |

@@ -654,6 +654,11 @@ def gitdir_apart(anchor: Path, gitdir: Path) -> bool:
     worktree's) names the gitdir the tree already has: not apart."""
     own = anchor / ".git"
     try:
+        if own.is_symlink():
+            # Never the tree's own gitdir: discovery refuses it (open_repo).
+            # Followed, a symlink the sandbox put there to the gitdir named
+            # apart gave the pair the directory's key, and its reference. [178]
+            return True
         return (read_gitfile(own) if own.is_file() else own.resolve()) != gitdir
     except (Refuse, OSError):
         return True
@@ -3523,10 +3528,13 @@ class Manifest:
     entries: dict[tuple[str, str], Entry]
 
     gitdir: str | None                      # the gitdir, when named apart from the root [157]
+    at: tuple[str, str] | None              # the gitdir and common dir it was taken from [178]
 
     def __init__(self, version: int, root: str | None, refs: list[tuple[str, Path]],
-                 entries: dict[tuple[str, str], Entry], gitdir: str | None = None) -> None:
+                 entries: dict[tuple[str, str], Entry], gitdir: str | None = None,
+                 at: tuple[str, str] | None = None) -> None:
         self.version, self.root, self.refs, self.entries, self.gitdir = version, root, refs, entries, gitdir
+        self.at = at
 
     @property
     def current(self) -> bool:
@@ -3545,7 +3553,9 @@ def load_manifest(key: Path) -> Manifest | None:
             return Manifest(version, None, [], {})
         entries = {(e["scope"], e["path"]): Entry(**e) for e in data["entries"]}
         refs = [(sc, Path(p)) for sc, p in data.get("refs", [])]
-        return Manifest(version, data.get("root"), refs, entries, data.get("gitdir"))
+        at = data.get("at")
+        at = (at[0], at[1]) if isinstance(at, list) and len(at) == 2 and all(isinstance(a, str) for a in at) else None
+        return Manifest(version, data.get("root"), refs, entries, data.get("gitdir"), at)
     except (json.JSONDecodeError, TypeError, KeyError, ValueError, AttributeError):
         return Manifest(1, None, [], {})     # unreadable: treated as an older format
 
@@ -3571,6 +3581,9 @@ def save_trust(repo: Repo, refs: list[tuple[str, Path]],
         # A gitdir named apart (GIT_DIR): what `list` and `retrust` open
         # the repository with, the root alone names another one. [157]
         **({"gitdir": repo.named} if repo.apart else {}),
+        # The gitdir and common dir the entries were read from: `<root>/.git`
+        # can be made to lead to others (moved_from). [178]
+        "at": [str(repo.gitdir), str(repo.common)],
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         # Roots designated by the trusted config: the only zones where
         # `restore` allows itself to delete (outside the gitdir).
@@ -5492,6 +5505,36 @@ def trust_holder(insp: Inspection) -> Path | None:
     return holder.label
 
 
+def moved_from(repo: Repo, old: Manifest | None) -> str | None:
+    """What to say when the repository opened is not in the git directory
+    its reference was taken from; None when it is, or when the reference
+    does not say (written before the gitdir was recorded).
+
+    A reference is filed under a directory, and is a gitdir's: the bytes of
+    its config and hooks, and their copies. `<directory>/.git` is the
+    sandbox's to rewrite: replaced by a gitfile naming another repository
+    of the user's, outside the volume, git run there works on that one —
+    and the check compared it with this reference ("<directory>/.git has
+    changed", a diff of somebody else's config) and named `gitblocker
+    restore` as the way out, which copied this repository's backed-up
+    config over the other one's and deleted its hooks. The same through a
+    linked worktree's `commondir`, where the main repository's files are
+    put back. Compared with nothing, restored into nothing: said as it is,
+    with both directories. A gitdir the user moved (`git init
+    --separate-git-dir`) is trusted again by hand; one that moved under a
+    holder (`submodule absorbgitdirs`) takes the holder's trust. [178]"""
+    if old is None or not old.current or old.at is None or old.at == (str(repo.gitdir), str(repo.common)):
+        return None
+    if old.at[0] != str(repo.gitdir):
+        what = (f"{repo.label}/.git no longer leads to the git directory trusted here, {old.at[0]}: "
+                f"it leads to {repo.gitdir}")
+    else:
+        what = (f"{repo.gitdir} no longer leads to the common directory trusted here, {old.at[1]}: "
+                f"it leads to {repo.common}")
+    return (what + ". Nothing is compared with another git directory, nor restored into it. If you moved "
+            "it yourself (git init --separate-git-dir): gitblocker trust")
+
+
 def check_or_die(repo: Repo, key: Path, old: Manifest | None, new: dict,
                  refs: list[tuple[str, Path]], interactive: bool = False,
                  accept: bool = False) -> None:
@@ -6152,6 +6195,9 @@ def main(argv: list[str]) -> int:
             rest = split_global_options(argv, orig).rest
             check_remote_destination(repo, rest, insp.scan)
         old = load_manifest(key)
+        moved = moved_from(repo, old)
+        if moved and mode in ("diff", "restore"):
+            raise Refuse(moved)
         fingerprinted = True
     except Refuse as e:
         if mode == "exec" and not e.recorded and (judged is not None or not has_tty()):
@@ -6162,6 +6208,8 @@ def main(argv: list[str]) -> int:
         raise
 
     if mode == "trust":
+        if moved:
+            warn(moved.partition(". Nothing is compared")[0])
         if old is not None and old.current and old.entries != new:
             # A changed repository: the diff first, so that `trust` is never
             # typed blind; on a terminal, a question; in a script, recorded.
@@ -6202,16 +6250,24 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
-        if old is None or (old.current and old.entries != new):
+        if old is None or moved or (old.current and old.entries != new):
             # A submodule, a linked worktree: trusted with the repository
             # that holds its gitdir, then judged under its own reference
-            # ([154]) — a copy, taken again when it no longer matches ([165]).
+            # ([154]) — a copy, taken again when it no longer matches
+            # ([165]), or when its gitdir moved under a holder ([178]).
             holder = trust_holder(insp)
             if holder is not None:
                 save_trust(repo, refs, new)
                 clear_pending(key)
                 info(f"trusted with {holder}: {repo.title}")
-                old = load_manifest(key)
+                old, moved = load_manifest(key), None
+        if moved:
+            raise Refuse(moved)
+        if old is not None and old.current and old.at is None and old.entries == new:
+            # Recorded before the gitdir was: taken now, from a repository
+            # found in its trusted state. [178]
+            save_trust(repo, refs, new)
+            old = load_manifest(key)
         # A child never asks, waits or notifies: it shares the parent's
         # terminal, which the parent git may be reading, and nobody is left
         # waiting on it. It takes what the closed list takes ([164]), or

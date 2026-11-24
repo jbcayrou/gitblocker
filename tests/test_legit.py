@@ -1840,6 +1840,27 @@ def test_worktree_paths_that_cross_no_planted_symlink_run(gb: GB, repo: Path, tm
     _silent(gb, repo, "worktree", "add", "-q", "--lock", "--reason", "docs", str(tmp_path / "four"))
 
 
+# ------------------ [178] a gitdir that moved under a holder (2026-11-24)
+def test_a_repository_absorbed_as_a_submodule_takes_its_holder_s_trust(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[178] a repository trusted on its own, then made a submodule: `git
+    submodule absorbgitdirs` moves its gitdir under the superproject's
+    `.git/modules/`. Its reference was taken from the gitdir it had; the
+    one it has now is held by the superproject, and once that one is
+    trusted the tree takes its trust ([154]) — no refusal for a gitdir
+    that moved."""
+    (repo / ".gitmodules").write_text('[submodule "vendor"]\n\tpath = vendor\n\turl = ./vendor\n')
+    gb.trust(repo)
+    vendor = make_source(gb, repo, "vendor")
+    gb.trust(vendor)
+    assert gb.git("add", "vendor", cwd=repo).rc == 0
+    assert gb.run("git", "submodule", "absorbgitdirs", "--", "vendor", cwd=repo).rc == 0
+    assert (vendor / ".git").is_file()
+    gb.trust(repo)
+    r = gb.run("git", "status", "--short", cwd=vendor)
+    assert r.rc == 0 and f"trusted with {repo}" in r.err, r.text
+    assert not gb.check(vendor).blocked
+
+
 # ------------------- a repository git borrows objects from ([156], 2026-11-13)
 def _objects(repo: Path) -> int:
     """Object files the repository holds itself: loose objects and packs."""

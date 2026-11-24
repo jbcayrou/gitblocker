@@ -110,6 +110,117 @@ def test_config_diff_keeps_a_lone_cr_inside_its_line(gb: GB, repo: Path) -> None
     assert any(l.strip() == "+[core]" for l in lines), "CRLF must read as a plain line end"
 
 
+# ------------- [178] a reference is a gitdir's: nothing restored into another one
+def _victim(gb: GB, tmp_path: Path) -> Path:
+    """A repository of the user's the sandbox cannot write: outside the
+    volume, with a config and a hook of its own."""
+    v = tmp_path / "elsewhere" / "perso"
+    assert gb.git("init", "-q", str(v)).rc == 0
+    (v / "f").write_text("p\n")
+    assert gb.git("add", "f", cwd=v).rc == 0 and gb.git("commit", "-qm", "p", cwd=v).rc == 0
+    gb.git("config", "user.name", "the owner of perso", cwd=v)
+    write_exec(v / ".git/hooks/pre-push", "#!/bin/sh\nexit 0\n")
+    return v
+
+
+def _untouched(victim: Path, config: bytes) -> bool:
+    return (victim / ".git/config").read_bytes() == config and (victim / ".git/hooks/pre-push").is_file()
+
+
+def test_restore_writes_nothing_into_another_gitdir(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[178] the sandbox replaces `<repo>/.git` by a gitfile naming another
+    repository of the user's, outside the volume. git run in `<repo>` works
+    on that one; the check compared it with this repository's reference —
+    "<repo>/.git has changed" — and named `gitblocker restore` as the way
+    out, which copied this repository's backed-up config over the other
+    one's and deleted its hook."""
+    victim = _victim(gb, tmp_path)
+    config = (victim / ".git/config").read_bytes()
+    (repo / ".git").rename(repo / ".git.aside")
+    (repo / ".git").write_text(f"gitdir: {victim}/.git\n")
+    r = gb.check(repo)
+    assert r.blocked and "no longer leads to the git directory trusted" in r.err, r.text
+    assert str(victim / ".git") in r.err and "has changed since" not in r.err, r.text
+    for argv in (["restore", "-y"], ["restore"], ["diff"], ["git", "status"]):
+        r = gb.run(*argv, cwd=repo)
+        assert r.blocked and "no longer leads" in r.text, (argv, r.text)
+        assert _untouched(victim, config), f"{argv} wrote into the other repository"
+    (repo / ".git").unlink()
+    (repo / ".git.aside").rename(repo / ".git")
+    assert not gb.check(repo).blocked                       # back in place: the reference is this gitdir's
+
+
+def test_restore_writes_nothing_through_a_rewritten_commondir(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[178] the same through a linked worktree's `commondir`: the common
+    dir is where `restore` puts the main repository's config and hooks
+    back."""
+    victim = _victim(gb, tmp_path)
+    config = (victim / ".git/config").read_bytes()
+    wt = tmp_path / "wt"
+    assert gb.run("git", "worktree", "add", "-q", str(wt), cwd=repo).rc == 0
+    assert gb.run("git", "status", "--short", cwd=wt).rc == 0           # its own reference
+    (repo / ".git/worktrees/wt/commondir").write_text(f"{victim}/.git\n")
+    r = gb.check(wt)
+    assert r.blocked and "no longer leads" in r.err, r.text
+    r = gb.run("restore", "-y", cwd=wt)
+    assert r.blocked and _untouched(victim, config), r.text
+
+
+def test_restore_under_a_gitdir_named_apart_ignores_a_planted_dotgit_symlink(gb: GB, repo: Path,
+                                                                           tmp_path: Path) -> None:
+    """[178] two repositories on one tree: its own `.git`, and a gitdir
+    named apart (GIT_DIR, a dotfiles repository). The sandbox moves the
+    tree's `.git` aside and puts a symlink to the other gitdir in its
+    place: "is `<tree>/.git` this gitdir?" followed the symlink, the pair
+    took the directory's key, and `restore` typed for the gitdir named
+    apart wrote the tree's own backup into it."""
+    apart = tmp_path / "elsewhere" / "dot.git"
+    env = {"GIT_DIR": str(apart), "GIT_WORK_TREE": str(repo)}
+    assert gb.git("init", "-q", "--bare", str(apart)).rc == 0
+    gb.git("--git-dir", str(apart), "config", "core.bare", "false")
+    write_exec(apart / "hooks/pre-push", "#!/bin/sh\nexit 0\n")
+    other = GB({**gb.env, **env}, gb.state, gb.raw_exec)
+    other.trust(repo)
+    config = (apart / "config").read_bytes()
+    (repo / ".git").rename(repo / ".git.aside")
+    os.symlink(apart, repo / ".git")
+    r = other.run("restore", "-y", cwd=repo)
+    assert "nothing to restore" in r.text, r.text
+    assert (apart / "config").read_bytes() == config and (apart / "hooks/pre-push").is_file()
+    assert not other.check(repo).blocked
+
+
+def test_a_gitdir_the_user_moved_is_trusted_again_by_hand(gb: GB, repo: Path, tmp_path: Path) -> None:
+    """[178] the price: `git init --separate-git-dir` moves the gitdir of a
+    trusted repository; the next command says so and names both, `gitblocker
+    trust` records the new one."""
+    sep = tmp_path / "elsewhere" / "sep.git"
+    sep.parent.mkdir(parents=True)
+    assert gb.git("init", "-q", f"--separate-git-dir={sep}", cwd=repo).rc == 0
+    r = gb.check(repo)
+    assert r.blocked and "no longer leads" in r.err and str(sep) in r.err and "gitblocker trust" in r.err, r.text
+    assert gb.run("trust", cwd=repo).rc == 0
+    assert not gb.check(repo).blocked
+
+
+def test_a_reference_recorded_before_takes_its_gitdir_at_the_next_command(gb: GB, repo: Path,
+                                                                        tmp_path: Path) -> None:
+    """[178] a reference written before the gitdir was recorded gets it at
+    the first command that finds the repository in its trusted state: no
+    `trust` to type again, and the protection from then on."""
+    import json
+    key = gb.key_for(repo)
+    data = json.loads(key.read_text())
+    assert data.pop("at"), "save_trust no longer records the gitdir"
+    key.write_text(json.dumps(data))
+    assert gb.run("git", "status", "--short", cwd=repo).rc == 0
+    assert json.loads(key.read_text()).get("at") == [str(repo / ".git"), str(repo / ".git")]
+    victim = _victim(gb, tmp_path)
+    (repo / ".git").rename(repo / ".git.aside")
+    (repo / ".git").write_text(f"gitdir: {victim}/.git\n")
+    assert "no longer leads" in gb.run("restore", "-y", cwd=repo).text
+
+
 def test_restore_noop(gb: GB, repo: Path) -> None:
     r = gb.run("restore", "-y", cwd=repo)
     assert r.rc == 0 and "nothing to restore" in r.out

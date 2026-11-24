@@ -971,6 +971,32 @@ recorded before [157] for such a repository sits under the directory's
 key, with no gitdir: the repository is "never trusted" once under its
 own, and `gitblocker forget <tree>` drops the old one ([157]).
 
+**A reference is a gitdir's** (`moved_from`, [178]). It is filed under a
+directory, and what it holds — the bytes of a config and of hooks, and
+their copies for `restore` — was read from one gitdir and one common dir,
+recorded with it (`at`). `<directory>/.git` is the sandbox's to rewrite:
+replaced by a gitfile naming another repository of the user's, outside the
+volume, git run in the directory works on that one. The check compared it
+with this reference — "<directory>/.git has changed since the last trust",
+the diff of somebody else's config — and named `gitblocker restore` as the
+way out, which copied this repository's backed-up config over the other
+one's and deleted its hooks: the sandbox reaching, through the user's
+hand, a repository it could not write. The same through a linked
+worktree's `commondir`, where the main repository's files are put back.
+When the repository opened is not where the reference was taken, nothing
+is compared and nothing is restored: the refusal says so and names both
+directories, in every mode but `trust`, which says it and records the new
+one after its review. A gitdir the user moved (`git init
+--separate-git-dir`) costs that one `trust`; one that moved under a
+holder (`git submodule absorbgitdirs` of a repository trusted on its own)
+takes the holder's trust instead (`trust_holder`). `gitdir_apart` no
+longer follows a symlink at `<directory>/.git` — never the tree's own
+gitdir, discovery refuses it: with one planted there to the gitdir named
+apart, the pair took the directory's key and reference, and `restore`
+typed for the dotfiles repository wrote the tree's own backup into it. A
+reference written before the gitdir was recorded takes it at the first
+command that finds the repository in its trusted state.
+
 ## Auto-trust (clone/init)
 
 `parse_new_repo` reads git's global options (`-C`, `-c`…), spots
@@ -1544,7 +1570,7 @@ read) and python 3.9 is not offered — the Linux runner is named
 (`ubuntu-24.04`), and Ubuntu 26.04 is tested with its own git. A new git
 enters the matrix with its inventory.
 
-**`python3 -m pytest`** (~1830 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
+**`python3 -m pytest`** (~1840 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],
 [160], [161] — accepted limitations; ~410 s, ~70 s with `-n 8` on the command line),
 to run before any change:
 
