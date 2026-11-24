@@ -1641,7 +1641,12 @@ a space ([152]); git 2.56's default maintenance strategy no longer runs
 strategy now. What its first run on GitHub found: `ubuntu-latest` is
 Ubuntu 26.04, where git 2.39, 2.43 and 2.47 did not build (cause not
 read) and python 3.9 is not offered — the Linux runner is named
-(`ubuntu-24.04`), and Ubuntu 26.04 is tested with its own git. A new git
+(`ubuntu-24.04`), and Ubuntu 26.04 is tested with its own git. What its
+first tag found (v0.1, 2026-11-24): macOS runners are few, GitHub cancels
+a job none of them took ("not acquired by Runner of type hosted", 15 to
+30 minutes after it was queued, whatever `timeout-minutes` says) and
+`release`, which needs every job, is skipped — the cancelled jobs are run
+again (`gh run rerun <id> --failed`), three times that day. A new git
 enters the matrix with its inventory.
 
 **`python3 -m pytest`** (~1850 tests, expected failures [44], [71], [74], [95], [123], [126], [129], [158],

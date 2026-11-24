@@ -11,6 +11,14 @@
 # published is the one that was tested, and nothing is public until the
 # draft is published by hand.
 #
+# macOS runners are few. GitHub cancels a job that none of them took ("The
+# job was not acquired by Runner of type hosted even after multiple
+# attempts"), 15 to 30 minutes after it was queued, whatever
+# `timeout-minutes` says; `release` needs every job and is then skipped.
+# Run what was cancelled again, as many times as it takes (three for
+# v0.1): `gh run rerun <run id> --failed`. The reason is an annotation of
+# the job: `gh api repos/<owner>/<repo>/check-runs/<job id>/annotations`.
+#
 # The Linux runner is named, not `ubuntu-latest`: that label moved to Ubuntu
 # 26.04 under the first run of this file, where git 2.39, 2.43 and 2.47 did
 # not build and python 3.9 is not offered.
